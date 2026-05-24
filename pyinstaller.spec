@@ -23,10 +23,8 @@ pyz = PYZ(a.pure, a.zipped_data, cipher=None)
 exe = EXE(
     pyz,
     a.scripts,
-    a.binaries,
-    a.zipfiles,
-    a.datas,
     [],
+    exclude_binaries=True,
     name='VoiceTaskBoard',
     debug=False,
     bootloader_ignore_signals=False,
