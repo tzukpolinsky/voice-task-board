@@ -1,0 +1,1 @@
+Voice Task Board is a Windows desktop app that lives in the system tray and lets you create and manage tasks with voice commands. It is designed around a compact local app shell, a tray-first workflow, and a task board UI that will be built out in later phases.

@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "voice-task-board"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+  "pywin32>=306",
+  "pystray>=0.19",
+  "Pillow>=10.0",
+  "sounddevice>=0.4.6",
+  "numpy>=1.26",
+  "onnxruntime>=1.17",
+  "httpx>=0.27",
+  "pydantic>=2.5",
+  "pywebview>=5.0",
+]
+
+[project.optional-dependencies]
+dev = ["mypy", "ruff", "pyinstaller>=6.5"]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.mypy]
+python_version = "3.11"
+files = ["src"]
+strict = true
+warn_unused_configs = true
+
+[[tool.mypy.overrides]]
+module = ["win32api", "win32con", "win32gui", "pystray", "onnxruntime", "sounddevice"]
+ignore_missing_imports = true
