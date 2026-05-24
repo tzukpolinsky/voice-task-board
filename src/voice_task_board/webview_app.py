@@ -154,12 +154,13 @@ def create_window() -> webview.Window:
             hidden=True,
         )
         
-        def on_window_close() -> None:
-            """Hide window instead of destroying it, so user can reopen from tray."""
+        def on_window_closing() -> bool:
+            """Cancel destruction and hide instead, so the tray stays alive."""
             if _window:
                 _window.hide()
+            return False
 
-        _window.events.closed += on_window_close
+        _window.events.closing += on_window_closing
         logger.info("Webview window created")
         return _window
     except Exception as e:
@@ -169,6 +170,15 @@ def create_window() -> webview.Window:
 
 def get_window() -> webview.Window | None:
     return _window
+
+
+def hide_window() -> None:
+    if _window is None:
+        return
+    try:
+        _window.hide()
+    except Exception as e:
+        logger.debug(f"Failed to hide window: {e}")
 
 
 def show_window() -> None:

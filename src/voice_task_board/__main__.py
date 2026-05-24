@@ -164,7 +164,7 @@ def main() -> int:
         except Exception as e:
             logger.exception(f"Tray error: {e}")
 
-    tray_thread = threading.Thread(target=run_tray, name="tray", daemon=True)
+    tray_thread = threading.Thread(target=run_tray, name="tray", daemon=False)
     tray_thread.start()
 
     try:
