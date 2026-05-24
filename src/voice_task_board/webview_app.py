@@ -158,7 +158,7 @@ def create_window() -> webview.Window:
             """Hide window instead of destroying it, so user can reopen from tray."""
             if _window:
                 _window.hide()
-        
+
         _window.events.closed += on_window_close
         logger.info("Webview window created")
         return _window
