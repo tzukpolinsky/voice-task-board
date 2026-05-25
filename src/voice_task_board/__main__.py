@@ -2,21 +2,22 @@ from __future__ import annotations
 
 import logging
 import sys
-import struct
 import threading
-from datetime import datetime
 from typing import Any
 
 from voice_task_board.hotkey import HotkeyListener
 from voice_task_board.tray import create_tray_icon
 from voice_task_board.logging_setup import configure_logging
 from voice_task_board.audio import record_while_held
-from voice_task_board.paths import recordings_dir
 from voice_task_board.config import get_config
 from voice_task_board.gemini import GeminiBackend
 from voice_task_board.apply_intent import apply, ApplyResult
 from voice_task_board.db import get_db
 from voice_task_board import webview_app
+from voice_task_board import scheduler as sched
+from voice_task_board import notifications as notif
+from voice_task_board import remote_sync
+from voice_task_board.archive import run_archive_sweep
 
 
 logger = logging.getLogger(__name__)
@@ -32,39 +33,17 @@ def _get_hotkey_listener() -> HotkeyListener | None:
     return _hotkey_listener
 
 
-def _save_wav(pcm_bytes: bytes, sample_rate: int = 16000, channels: int = 1, bits_per_sample: int = 16) -> str:
-    byte_rate = sample_rate * channels * bits_per_sample // 8
-    block_align = channels * bits_per_sample // 8
-    subchunk2_size = len(pcm_bytes)
-
-    wav_header = struct.pack(
-        "<4sI4s4sIHHIIHH4sI",
-        b"RIFF",
-        36 + subchunk2_size,
-        b"WAVE",
-        b"fmt ",
-        16,
-        1,
-        channels,
-        sample_rate,
-        byte_rate,
-        block_align,
-        bits_per_sample,
-        b"data",
-        subchunk2_size,
-    )
-
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
-    output_path = recordings_dir() / f"{timestamp}.wav"
-    with open(output_path, "wb") as f:
-        f.write(wav_header + pcm_bytes)
-    logger.info(f"Saved recording to {output_path}")
-    return str(output_path)
+def _format_due(intent_due: str | None, is_full_day: bool) -> str | None:
+    if not intent_due:
+        return None
+    if is_full_day:
+        return intent_due[:10]
+    return intent_due[:16].replace("T", " ")
 
 
 def main() -> int:
     global _hotkey_listener, _tray_icon, _gemini_backend
-    
+
     configure_logging()
     logger.info("Starting Voice Task Board")
 
@@ -73,7 +52,7 @@ def main() -> int:
 
     tasks = db.list_tasks()
     logger.info(f"Loaded {len(tasks)} existing tasks")
-    
+
     if config.gemini_api_key:
         try:
             _gemini_backend = GeminiBackend(config.gemini_api_key)
@@ -81,11 +60,25 @@ def main() -> int:
         except Exception as e:
             logger.warning(f"Failed to initialize Gemini backend: {e}")
 
+    # Wire reminder callback
+    def _on_reminder(task: Any) -> None:
+        notif.show_reminder(task)
+
+    notif.set_snooze_callback(sched.snooze)
+    sched.set_notify_callback(_on_reminder)
+    sched.start()
+
+    # Run archive sweep and drift check in background on startup
+    run_archive_sweep()
+    if config.remote_provider and config.remote_tokens:
+        remote_sync.check_drift_on_startup()
+        remote_sync.retry_pending()
+
     def on_hotkey_pressed() -> None:
         global _recording_active
         with _recording_lock:
             if _recording_active:
-                return  # auto-repeat while held — ignore silently
+                return
             _recording_active = True
 
         def record_in_background() -> None:
@@ -98,7 +91,7 @@ def main() -> int:
                         _tray_icon.notify("Set your Gemini API key in Settings")
                     return
 
-                logger.info("Recording started (hold to record, release to stop)")
+                logger.info("Recording started")
                 listener = _hotkey_listener
                 if listener is None:
                     raise RuntimeError("Hotkey listener not initialized")
@@ -109,24 +102,55 @@ def main() -> int:
                     logger.info("No speech detected")
                     return
 
-                wav_path = _save_wav(pcm_bytes)
                 duration_seconds = len(pcm_bytes) / (16000 * 2)
-                logger.info(f"Recording complete: {duration_seconds:.1f}s saved to {wav_path}")
+                logger.info(f"Recording complete: {duration_seconds:.1f}s")
 
                 logger.info("Extracting intent from Gemini")
                 if not _gemini_backend:
                     raise RuntimeError("Gemini backend not initialized")
                 category_names = db.get_category_names()
-                logger.debug(f"Categories passed to Gemini: {category_names}")
                 intent = _gemini_backend.extract_intent(pcm_bytes, category_names)
                 logger.info(f"Intent: {intent}")
 
+                if intent.action == "add" and intent.mirror_to_remote and config.remote_provider:
+                    # Only confirm when the task will be mirrored to a remote list —
+                    # local-only tasks add silently to avoid disrupting the user.
+                    due_label = _format_due(intent.due_at, intent.is_full_day)
+                    action = notif.show_confirmation_toast(
+                        title=intent.title,
+                        due=due_label,
+                        category=intent.category,
+                    )
+
+                    if action == "cancel":
+                        if _tray_icon:
+                            _tray_icon.notify("Task discarded")
+                        return
+
+                    if action == "edit":
+                        # Hand off to the in-window editor; this opens the board.
+                        edit_action = webview_app.show_confirmation(
+                            title=intent.title,
+                            due=due_label,
+                            category=intent.category,
+                            mirror=intent.mirror_to_remote,
+                        )
+                        if edit_action == "cancel":
+                            if _tray_icon:
+                                _tray_icon.notify("Task discarded")
+                            return
+
                 logger.info("Applying intent to database")
-                result = apply(intent, _gemini_backend)
+                result, task_id = apply(intent, _gemini_backend)
                 logger.info(f"Apply result: {result}")
 
-                if result == ApplyResult.CREATED:
+                if result == ApplyResult.CREATED and task_id:
+                    # Fire mirror if flagged
+                    if intent.mirror_to_remote and config.remote_provider:
+                        remote_sync.mirror_create(task_id)
                     msg = f"✓ Added: {intent.title}"
+                    if intent.due_at:
+                        msg += f" ({_format_due(intent.due_at, intent.is_full_day)})"
                 elif result == ApplyResult.DELETED:
                     msg = "✓ Deleted task"
                 elif result == ApplyResult.EDITED:
@@ -135,10 +159,10 @@ def main() -> int:
                     msg = "✗ No matching task"
                 else:
                     msg = "? Could not understand"
-                
+
                 if _tray_icon:
                     _tray_icon.notify(msg)
-                    
+
             except ValueError as e:
                 logger.info(f"Input error: {e}")
             except Exception as e:
@@ -173,9 +197,10 @@ def main() -> int:
     except Exception as e:
         logger.exception(f"WebView error: {e}")
     finally:
+        sched.stop()
         if _hotkey_listener:
             _hotkey_listener.stop()
-    
+
     return 0
 
 

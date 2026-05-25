@@ -46,6 +46,23 @@ def configure_logging() -> None:
     else:
         log_dir = _app_data_dir() / "logs"
         log_dir.mkdir(parents=True, exist_ok=True)
+
+        for old_log in log_dir.glob("*.log"):
+            try:
+                old_log.unlink()
+            except OSError:
+                pass
+
+        # One-shot cleanup of dirs from older versions that are no longer used.
+        import shutil
+        for stale in ("recordings", "models"):
+            stale_path = _app_data_dir() / stale
+            if stale_path.exists():
+                try:
+                    shutil.rmtree(stale_path)
+                except OSError:
+                    pass
+
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         hostname = socket.gethostname()
         log_path = log_dir / f"{timestamp}_{hostname}.log"

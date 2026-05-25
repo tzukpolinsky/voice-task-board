@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import collections
+import contextlib
 import logging
 import numpy as np
 import sounddevice as sd
 import threading
 import time
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 
 from voice_task_board.vad import SileroVAD
 
@@ -23,6 +24,57 @@ _vad: SileroVAD | None = None
 _vad_lock = threading.Lock()
 
 _PREFERRED_HOST_APIS = ("WASAPI", "Windows WDM-KS", "Windows DirectSound", "MME")
+
+
+@contextlib.contextmanager
+def _muted_system_output() -> Iterator[None]:
+    """Mute the default render endpoint for the duration of recording.
+
+    Uses pycaw (Core Audio). If anything goes wrong (no audio device, COM
+    init failure on a headless box, pycaw missing), we log and continue
+    without muting rather than blocking recording.
+    """
+    volume = None
+    previously_muted = False
+    logger.info("Attempting to mute system output for recording")
+    try:
+        from ctypes import POINTER, cast
+        import comtypes
+        from comtypes import CLSCTX_ALL
+        from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
+
+        try:
+            comtypes.CoInitialize()
+        except OSError:
+            pass
+
+        speakers = AudioUtilities.GetSpeakers()
+        imm_device = getattr(speakers, "_dev", speakers)
+        interface = imm_device.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
+        volume = cast(interface, POINTER(IAudioEndpointVolume))
+        previously_muted = bool(volume.GetMute())
+        if not previously_muted:
+            volume.SetMute(1, None)
+        logger.info("System output muted")
+    except Exception as e:
+        logger.warning(f"Could not mute system output: {e!r}")
+        volume = None
+
+    try:
+        yield
+    finally:
+        if volume is not None and not previously_muted:
+            try:
+                volume.SetMute(0, None)
+                logger.info("System output unmuted")
+            except Exception as e:
+                logger.warning(f"Could not restore system output mute state: {e!r}")
+        # Explicitly release before thread exit so the COM pointer is cleaned up
+        # in the correct apartment.  Do NOT call CoUninitialize() here — letting
+        # the thread exit naturally tears down its STA cleanly, whereas an explicit
+        # CoUninitialize() races with Python's GC releasing comtypes pointers from
+        # an arbitrary thread, which corrupts the shared COM state used by WebView2.
+        volume = None
 
 
 def _pick_input_device() -> int | None:
@@ -149,14 +201,15 @@ def record_until_silence() -> bytes:
         frame_event.set()
 
     logger.info("Starting audio recording")
-    stream, actual_rate = _open_input_stream(audio_callback)
-    if actual_rate != _SAMPLE_RATE:
-        stream.close()
-        raise sd.PortAudioError(
-            f"VAD requires {_SAMPLE_RATE} Hz but device only supports {actual_rate} Hz"
-        )
-    with stream:
-        stop_event.wait()
+    with _muted_system_output():
+        stream, actual_rate = _open_input_stream(audio_callback)
+        if actual_rate != _SAMPLE_RATE:
+            stream.close()
+            raise sd.PortAudioError(
+                f"VAD requires {_SAMPLE_RATE} Hz but device only supports {actual_rate} Hz"
+            )
+        with stream:
+            stop_event.wait()
 
     pcm_data = b"".join(frame.astype(np.int16).tobytes() for frame in pcm_frames)
     logger.info(f"Recording stopped. Total frames: {total_frames}, silence frames: {silence_frames}, bytes: {len(pcm_data)}")
@@ -176,15 +229,16 @@ def record_while_held(is_held: Callable[[], bool], poll_interval: float = 0.03) 
             pcm_frames.append(frame)
 
     logger.info("Starting push-to-talk recording")
-    stream, actual_rate = _open_input_stream(audio_callback)
-    with stream:
-        max_seconds = _MAX_FRAMES * _FRAME_SIZE / _SAMPLE_RATE
-        start = time.monotonic()
-        while is_held():
-            if time.monotonic() - start >= max_seconds:
-                logger.info("Hit max recording length, stopping")
-                break
-            time.sleep(poll_interval)
+    with _muted_system_output():
+        stream, actual_rate = _open_input_stream(audio_callback)
+        with stream:
+            max_seconds = _MAX_FRAMES * _FRAME_SIZE / _SAMPLE_RATE
+            start = time.monotonic()
+            while is_held():
+                if time.monotonic() - start >= max_seconds:
+                    logger.info("Hit max recording length, stopping")
+                    break
+                time.sleep(poll_interval)
 
     with lock:
         captured = np.concatenate(pcm_frames) if pcm_frames else np.zeros(0, dtype=np.int16)

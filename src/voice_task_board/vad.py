@@ -6,9 +6,6 @@ import onnxruntime as rt
 import sys
 from pathlib import Path
 
-from voice_task_board.paths import models_dir
-
-
 logger = logging.getLogger(__name__)
 
 

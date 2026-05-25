@@ -1,6 +1,66 @@
 import React, { useState, useRef } from 'react'
 import { api, Category } from '../api'
 
+// ── Remote provider section ──────────────────────────────────────────────────
+
+const RemoteSection: React.FC<{ provider: string | null; onChanged: () => void }> = ({ provider, onChanged }) => {
+  const [connecting, setConnecting] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const handleConnect = async (p: string) => {
+    setConnecting(true)
+    setError(null)
+    try {
+      const result = await api.connectRemoteProvider(p)
+      if (result.ok) {
+        onChanged()
+      } else {
+        setError(result.error ?? 'Connection failed')
+      }
+    } catch (e) {
+      setError(String(e))
+    } finally {
+      setConnecting(false)
+    }
+  }
+
+  const handleDisconnect = async () => {
+    await api.disconnectRemoteProvider()
+    onChanged()
+  }
+
+  return (
+    <div style={{ marginBottom: '16px' }}>
+      <label style={{ display: 'block', marginBottom: '8px', fontWeight: 500 }}>Remote Reminders</label>
+      {provider ? (
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px', background: '#e8f5e9', borderRadius: '4px', fontSize: '13px' }}>
+          <span style={{ flex: 1 }}>☁ Connected to <strong>Google Tasks</strong></span>
+          <button
+            onClick={handleDisconnect}
+            style={{ padding: '4px 10px', background: '#ff4444', color: '#fff', border: 'none', borderRadius: '3px', cursor: 'pointer', fontSize: '12px' }}
+          >
+            Disconnect
+          </button>
+        </div>
+      ) : (
+        <div>
+          <p style={{ fontSize: '12px', color: '#666', marginBottom: '8px' }}>
+            Mirror tasks to Google Tasks so they appear on your phone.
+          </p>
+          <button
+            onClick={() => handleConnect('google')}
+            disabled={connecting}
+            style={{ width: '100%', padding: '10px', background: '#4285F4', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '13px', fontWeight: 500 }}
+          >
+            {connecting ? 'Opening browser...' : '🔗 Connect Google Tasks'}
+          </button>
+          {error && <p style={{ marginTop: '6px', fontSize: '12px', color: '#f44' }}>{error}</p>}
+        </div>
+      )}
+    </div>
+  )
+}
+
 interface SettingsProps {
   isOpen: boolean
   onClose: () => void
@@ -89,6 +149,7 @@ export const Settings: React.FC<SettingsProps> = ({ isOpen, onClose, onConfigCha
   const [categories, setCategories] = useState<Category[]>([])
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState<string | null>(null)
+  const [remoteProvider, setRemoteProvider] = useState<string | null>(null)
 
   React.useEffect(() => {
     if (isOpen) {
@@ -103,6 +164,7 @@ export const Settings: React.FC<SettingsProps> = ({ isOpen, onClose, onConfigCha
         const config = await pywebview.api.get_config()
         setApiKey(config.gemini_api_key || '')
         setHotkey(config.hotkey || 'ctrl+shift+space')
+        setRemoteProvider(config.remote_provider ?? null)
       }
       const cats = await api.getCategories()
       setCategories(cats || [])
@@ -285,6 +347,8 @@ export const Settings: React.FC<SettingsProps> = ({ isOpen, onClose, onConfigCha
             </button>
           </div>
         </div>
+
+        <RemoteSection provider={remoteProvider} onChanged={loadConfig} />
 
         <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
           <button

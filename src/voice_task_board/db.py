@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import sqlite3
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import cast
@@ -24,6 +24,17 @@ class Task:
     status: str
     created_at: str
     updated_at: str
+    due_at_utc: str | None = None
+    due_tz: str | None = None
+    is_full_day: bool = False
+    lead_time_minutes: int = 30
+    recurrence_rule: str | None = None
+    mirror_to_remote: bool = False
+    external_provider: str | None = None
+    external_id: str | None = None
+    external_updated_at: str | None = None
+    mirror_pending: bool = False
+    reminder_fired: bool = False
 
 
 class MatchResult(Enum):
@@ -71,6 +82,19 @@ INSERT INTO categories (name, sort_order) VALUES ('Work', 2);
     """
 ALTER TABLE tasks ADD COLUMN description TEXT NOT NULL DEFAULT '';
     """,
+    """
+ALTER TABLE tasks ADD COLUMN due_at_utc TEXT;
+ALTER TABLE tasks ADD COLUMN due_tz TEXT;
+ALTER TABLE tasks ADD COLUMN is_full_day INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE tasks ADD COLUMN lead_time_minutes INTEGER NOT NULL DEFAULT 30;
+ALTER TABLE tasks ADD COLUMN recurrence_rule TEXT;
+ALTER TABLE tasks ADD COLUMN mirror_to_remote INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE tasks ADD COLUMN external_provider TEXT;
+ALTER TABLE tasks ADD COLUMN external_id TEXT;
+ALTER TABLE tasks ADD COLUMN external_updated_at TEXT;
+ALTER TABLE tasks ADD COLUMN mirror_pending INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE tasks ADD COLUMN reminder_fired INTEGER NOT NULL DEFAULT 0;
+    """,
 ]
 
 
@@ -104,7 +128,18 @@ class Database:
                     self._conn.rollback()
                     raise
 
-    def add_task(self, title: str, category_name: str, description: str = "") -> int:
+    def add_task(
+        self,
+        title: str,
+        category_name: str,
+        description: str = "",
+        due_at_utc: str | None = None,
+        due_tz: str | None = None,
+        is_full_day: bool = False,
+        lead_time_minutes: int = 30,
+        recurrence_rule: str | None = None,
+        mirror_to_remote: bool = False,
+    ) -> int:
         with self._lock:
             cursor = self._conn.cursor()
             cursor.execute("SELECT id FROM categories WHERE LOWER(name) = LOWER(?)", (category_name,))
@@ -117,18 +152,39 @@ class Database:
                 category_id = default_row[0] if default_row else 1
 
             cursor.execute(
-                "INSERT INTO tasks (title, description, category_id) VALUES (?, ?, ?)",
-                (title, description, category_id),
+                """INSERT INTO tasks
+                   (title, description, category_id, due_at_utc, due_tz, is_full_day,
+                    lead_time_minutes, recurrence_rule, mirror_to_remote, mirror_pending)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (title, description, category_id, due_at_utc, due_tz,
+                 1 if is_full_day else 0, lead_time_minutes, recurrence_rule,
+                 1 if mirror_to_remote else 0, 1 if mirror_to_remote else 0),
             )
             self._conn.commit()
             return cast(int, cursor.lastrowid)
 
-    def create_task(self, title: str, category_id: int, description: str = "") -> int:
+    def create_task(
+        self,
+        title: str,
+        category_id: int,
+        description: str = "",
+        due_at_utc: str | None = None,
+        due_tz: str | None = None,
+        is_full_day: bool = False,
+        lead_time_minutes: int = 30,
+        recurrence_rule: str | None = None,
+        mirror_to_remote: bool = False,
+    ) -> int:
         with self._lock:
             cursor = self._conn.cursor()
             cursor.execute(
-                "INSERT INTO tasks (title, description, category_id) VALUES (?, ?, ?)",
-                (title, description, category_id),
+                """INSERT INTO tasks
+                   (title, description, category_id, due_at_utc, due_tz, is_full_day,
+                    lead_time_minutes, recurrence_rule, mirror_to_remote, mirror_pending)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (title, description, category_id, due_at_utc, due_tz,
+                 1 if is_full_day else 0, lead_time_minutes, recurrence_rule,
+                 1 if mirror_to_remote else 0, 1 if mirror_to_remote else 0),
             )
             self._conn.commit()
             return cast(int, cursor.lastrowid)
@@ -204,28 +260,98 @@ class Database:
             else:
                 return MatchResult.NoMatch()
 
-    def list_tasks(self) -> list[Task]:
+    def list_tasks(self, include_done: bool = False) -> list[Task]:
+        with self._lock:
+            cursor = self._conn.cursor()
+            where = "" if include_done else "WHERE tasks.status != 'done'"
+            cursor.execute(
+                f"""SELECT tasks.id, tasks.title, tasks.description, tasks.category_id, categories.name,
+                          tasks.status, tasks.created_at, tasks.updated_at,
+                          tasks.due_at_utc, tasks.due_tz, tasks.is_full_day, tasks.lead_time_minutes,
+                          tasks.recurrence_rule, tasks.mirror_to_remote, tasks.external_provider,
+                          tasks.external_id, tasks.external_updated_at, tasks.mirror_pending,
+                          tasks.reminder_fired
+                   FROM tasks JOIN categories ON tasks.category_id = categories.id
+                   {where}
+                   ORDER BY tasks.created_at DESC"""
+            )
+            return [self._row_to_task(row) for row in cursor.fetchall()]
+
+    def list_tasks_due_for_reminder(self, now_utc: str) -> list[Task]:
+        """Return open tasks whose reminder should fire: due_at_utc - lead_time_minutes <= now and not yet fired."""
         with self._lock:
             cursor = self._conn.cursor()
             cursor.execute(
                 """SELECT tasks.id, tasks.title, tasks.description, tasks.category_id, categories.name,
-                          tasks.status, tasks.created_at, tasks.updated_at
+                          tasks.status, tasks.created_at, tasks.updated_at,
+                          tasks.due_at_utc, tasks.due_tz, tasks.is_full_day, tasks.lead_time_minutes,
+                          tasks.recurrence_rule, tasks.mirror_to_remote, tasks.external_provider,
+                          tasks.external_id, tasks.external_updated_at, tasks.mirror_pending,
+                          tasks.reminder_fired
                    FROM tasks JOIN categories ON tasks.category_id = categories.id
-                   ORDER BY tasks.created_at DESC"""
+                   WHERE tasks.status = 'open'
+                     AND tasks.due_at_utc IS NOT NULL
+                     AND tasks.reminder_fired = 0
+                     AND datetime(tasks.due_at_utc, '-' || tasks.lead_time_minutes || ' minutes') <= datetime(?)""",
+                (now_utc,),
             )
-            return [
-                Task(
-                    id=int(row[0]),
-                    title=row[1],
-                    description=row[2] or "",
-                    category_id=int(row[3]),
-                    category_name=row[4],
-                    status=row[5],
-                    created_at=row[6],
-                    updated_at=row[7],
-                )
-                for row in cursor.fetchall()
-            ]
+            return [self._row_to_task(row) for row in cursor.fetchall()]
+
+    def list_mirrored_open_tasks(self) -> list[Task]:
+        """Return open tasks that have an external_id (for drift detection)."""
+        with self._lock:
+            cursor = self._conn.cursor()
+            cursor.execute(
+                """SELECT tasks.id, tasks.title, tasks.description, tasks.category_id, categories.name,
+                          tasks.status, tasks.created_at, tasks.updated_at,
+                          tasks.due_at_utc, tasks.due_tz, tasks.is_full_day, tasks.lead_time_minutes,
+                          tasks.recurrence_rule, tasks.mirror_to_remote, tasks.external_provider,
+                          tasks.external_id, tasks.external_updated_at, tasks.mirror_pending,
+                          tasks.reminder_fired
+                   FROM tasks JOIN categories ON tasks.category_id = categories.id
+                   WHERE tasks.status = 'open' AND tasks.external_id IS NOT NULL"""
+            )
+            return [self._row_to_task(row) for row in cursor.fetchall()]
+
+    def list_pending_mirror_tasks(self) -> list[Task]:
+        """Return tasks with mirror_pending=1 (failed sync, retry queue)."""
+        with self._lock:
+            cursor = self._conn.cursor()
+            cursor.execute(
+                """SELECT tasks.id, tasks.title, tasks.description, tasks.category_id, categories.name,
+                          tasks.status, tasks.created_at, tasks.updated_at,
+                          tasks.due_at_utc, tasks.due_tz, tasks.is_full_day, tasks.lead_time_minutes,
+                          tasks.recurrence_rule, tasks.mirror_to_remote, tasks.external_provider,
+                          tasks.external_id, tasks.external_updated_at, tasks.mirror_pending,
+                          tasks.reminder_fired
+                   FROM tasks JOIN categories ON tasks.category_id = categories.id
+                   WHERE tasks.mirror_pending = 1"""
+            )
+            return [self._row_to_task(row) for row in cursor.fetchall()]
+
+    @staticmethod
+    def _row_to_task(row: sqlite3.Row) -> Task:
+        return Task(
+            id=int(row[0]),
+            title=row[1],
+            description=row[2] or "",
+            category_id=int(row[3]),
+            category_name=row[4],
+            status=row[5],
+            created_at=row[6],
+            updated_at=row[7],
+            due_at_utc=row[8],
+            due_tz=row[9],
+            is_full_day=bool(row[10]),
+            lead_time_minutes=int(row[11]) if row[11] is not None else 30,
+            recurrence_rule=row[12],
+            mirror_to_remote=bool(row[13]),
+            external_provider=row[14],
+            external_id=row[15],
+            external_updated_at=row[16],
+            mirror_pending=bool(row[17]),
+            reminder_fired=bool(row[18]),
+        )
 
     def list_categories(self) -> list[dict[str, int | str]]:
         with self._lock:
@@ -272,12 +398,131 @@ class Database:
                 (category_id, task_id),
             )
             self._conn.commit()
-    
+
     def delete_task(self, task_id: int) -> None:
         """Delete a task by ID."""
         with self._lock:
             cursor = self._conn.cursor()
             cursor.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
+            self._conn.commit()
+
+    def complete_task(self, task_id: int) -> None:
+        """Mark a task as done."""
+        with self._lock:
+            cursor = self._conn.cursor()
+            cursor.execute(
+                "UPDATE tasks SET status = 'done', updated_at = datetime('now') WHERE id = ?",
+                (task_id,),
+            )
+            self._conn.commit()
+
+    def get_task(self, task_id: int) -> Task | None:
+        """Fetch a single task by ID."""
+        with self._lock:
+            cursor = self._conn.cursor()
+            cursor.execute(
+                """SELECT tasks.id, tasks.title, tasks.description, tasks.category_id, categories.name,
+                          tasks.status, tasks.created_at, tasks.updated_at,
+                          tasks.due_at_utc, tasks.due_tz, tasks.is_full_day, tasks.lead_time_minutes,
+                          tasks.recurrence_rule, tasks.mirror_to_remote, tasks.external_provider,
+                          tasks.external_id, tasks.external_updated_at, tasks.mirror_pending,
+                          tasks.reminder_fired
+                   FROM tasks JOIN categories ON tasks.category_id = categories.id
+                   WHERE tasks.id = ?""",
+                (task_id,),
+            )
+            row = cursor.fetchone()
+            return self._row_to_task(row) if row else None
+
+    def set_reminder_fired(self, task_id: int) -> None:
+        with self._lock:
+            self._conn.execute(
+                "UPDATE tasks SET reminder_fired = 1 WHERE id = ?", (task_id,)
+            )
+            self._conn.commit()
+
+    def set_external(
+        self,
+        task_id: int,
+        external_provider: str | None,
+        external_id: str | None,
+        external_updated_at: str | None,
+        mirror_pending: bool = False,
+    ) -> None:
+        with self._lock:
+            self._conn.execute(
+                """UPDATE tasks SET external_provider = ?, external_id = ?,
+                   external_updated_at = ?, mirror_pending = ?, mirror_to_remote = 1,
+                   updated_at = datetime('now') WHERE id = ?""",
+                (external_provider, external_id, external_updated_at,
+                 1 if mirror_pending else 0, task_id),
+            )
+            self._conn.commit()
+
+    def set_mirror_pending(self, task_id: int, pending: bool) -> None:
+        with self._lock:
+            self._conn.execute(
+                "UPDATE tasks SET mirror_pending = ? WHERE id = ?",
+                (1 if pending else 0, task_id),
+            )
+            self._conn.commit()
+
+    def set_mirror_drift(self, task_id: int, has_drift: bool) -> None:
+        """Store drift flag in external_updated_at as a sentinel '!drift' when drift detected."""
+        with self._lock:
+            val = "!drift" if has_drift else None
+            cursor = self._conn.cursor()
+            cursor.execute(
+                "SELECT external_updated_at FROM tasks WHERE id = ?", (task_id,)
+            )
+            row = cursor.fetchone()
+            if row and (row[0] == "!drift") == has_drift:
+                return  # no change
+            if has_drift:
+                self._conn.execute(
+                    "UPDATE tasks SET external_updated_at = '!drift' WHERE id = ?", (task_id,)
+                )
+            else:
+                self._conn.execute(
+                    "UPDATE tasks SET external_updated_at = NULL WHERE id = ? AND external_updated_at = '!drift'",
+                    (task_id,),
+                )
+            self._conn.commit()
+
+    def set_mirror_toggle(self, task_id: int, mirror: bool) -> None:
+        """Enable or disable mirroring for an existing task."""
+        with self._lock:
+            if mirror:
+                self._conn.execute(
+                    "UPDATE tasks SET mirror_to_remote = 1, mirror_pending = 1, updated_at = datetime('now') WHERE id = ?",
+                    (task_id,),
+                )
+            else:
+                self._conn.execute(
+                    """UPDATE tasks SET mirror_to_remote = 0, mirror_pending = 0,
+                       external_provider = NULL, external_id = NULL, external_updated_at = NULL,
+                       updated_at = datetime('now') WHERE id = ?""",
+                    (task_id,),
+                )
+            self._conn.commit()
+
+    def update_task_due(
+        self,
+        task_id: int,
+        due_at_utc: str | None,
+        due_tz: str | None,
+        is_full_day: bool,
+        lead_time_minutes: int,
+        recurrence_rule: str | None = None,
+    ) -> None:
+        with self._lock:
+            self._conn.execute(
+                """UPDATE tasks SET due_at_utc = ?, due_tz = ?, is_full_day = ?,
+                   lead_time_minutes = ?, recurrence_rule = ?, reminder_fired = 0,
+                   updated_at = datetime('now') WHERE id = ?""",
+                (due_at_utc, due_tz, 1 if is_full_day else 0, lead_time_minutes,
+                 recurrence_rule or None, task_id),
+            )
             self._conn.commit()
 
 

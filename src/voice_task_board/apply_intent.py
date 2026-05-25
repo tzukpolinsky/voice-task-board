@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from enum import Enum
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from voice_task_board.intent import FirstPassIntent
 from voice_task_board.db import get_db
@@ -19,18 +20,60 @@ class ApplyResult(Enum):
     NO_MATCH = "no_match"
 
 
-def apply(first: FirstPassIntent, gemini: GeminiBackend) -> ApplyResult:
+def _parse_due(intent: FirstPassIntent) -> tuple[str | None, str | None]:
+    """Return (due_at_utc, due_tz) from the intent's due_at field.
+
+    The AI returns local wall-clock times so we store them as-is in UTC column
+    but record the system timezone so the scheduler can interpret them correctly.
+    For recurring rules we always use wall-clock + zone, not UTC offsets.
+    """
+    if not intent.due_at:
+        return None, None
+    try:
+        import datetime as dt
+        from datetime import timezone
+
+        # Determine local system timezone
+        local_zone_str: str
+        try:
+            import tzlocal  # type: ignore
+            local_zone_str = str(tzlocal.get_localzone())
+        except Exception:
+            local_zone_str = "UTC"
+
+        due = intent.due_at
+        # Normalize to a consistent format for storage; keep as-is (wall clock)
+        # We store the raw value returned by AI; scheduler interprets with due_tz
+        return due, local_zone_str
+    except Exception as e:
+        logger.warning(f"Failed to parse due_at {intent.due_at!r}: {e}")
+        return None, None
+
+
+def apply(first: FirstPassIntent, gemini: GeminiBackend) -> tuple[ApplyResult, int | None]:
+    """Apply first-pass intent. Returns (result, task_id) where task_id is set on CREATED."""
     db = get_db()
 
     if first.action == "add":
-        db.add_task(first.title, first.category, first.content)
-        logger.info(f"Added task: {first.title!r} ({first.category})")
-        return ApplyResult.CREATED
+        due_at_utc, due_tz = _parse_due(first)
+        task_id = db.add_task(
+            title=first.title,
+            category_name=first.category,
+            description=first.content,
+            due_at_utc=due_at_utc,
+            due_tz=due_tz,
+            is_full_day=first.is_full_day,
+            lead_time_minutes=first.lead_time_minutes,
+            recurrence_rule=first.recurrence_rule,
+            mirror_to_remote=first.mirror_to_remote,
+        )
+        logger.info(f"Added task {task_id}: {first.title!r} ({first.category}) due={due_at_utc} mirror={first.mirror_to_remote}")
+        return ApplyResult.CREATED, task_id
 
     tasks = db.list_tasks()
     if not tasks:
         logger.info("Else-branch but no existing tasks to act on")
-        return ApplyResult.NO_MATCH
+        return ApplyResult.NO_MATCH, None
 
     task_dicts = [
         {"id": t.id, "title": t.title, "description": t.description, "category": t.category_name}
@@ -40,16 +83,16 @@ def apply(first: FirstPassIntent, gemini: GeminiBackend) -> ApplyResult:
 
     if resolved.action == "unknown" or resolved.target_id is None:
         logger.info(f"Layer-2 could not resolve: action={resolved.action} target_id={resolved.target_id}")
-        return ApplyResult.UNKNOWN
+        return ApplyResult.UNKNOWN, None
 
     if not any(t.id == resolved.target_id for t in tasks):
         logger.warning(f"Layer-2 returned target_id={resolved.target_id} which is not in current tasks")
-        return ApplyResult.NO_MATCH
+        return ApplyResult.NO_MATCH, None
 
     if resolved.action == "delete":
         db.delete_task(resolved.target_id)
         logger.info(f"Deleted task {resolved.target_id}")
-        return ApplyResult.DELETED
+        return ApplyResult.DELETED, resolved.target_id
 
     if resolved.action == "edit":
         updated = db.update_task(
@@ -60,8 +103,8 @@ def apply(first: FirstPassIntent, gemini: GeminiBackend) -> ApplyResult:
         )
         if updated:
             logger.info(f"Edited task {resolved.target_id}")
-            return ApplyResult.EDITED
+            return ApplyResult.EDITED, resolved.target_id
         logger.warning(f"Edit produced no changes on task {resolved.target_id}")
-        return ApplyResult.UNKNOWN
+        return ApplyResult.UNKNOWN, None
 
-    return ApplyResult.UNKNOWN
+    return ApplyResult.UNKNOWN, None

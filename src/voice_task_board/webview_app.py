@@ -11,28 +11,41 @@ import webview
 from voice_task_board.db import get_db, Task
 from voice_task_board.config import get_config
 from voice_task_board.gemini import GeminiBackend
+from voice_task_board import remote_sync, archive as archive_mod
 
 
 logger = logging.getLogger(__name__)
 
 
+def _task_to_dict(t: Task) -> dict:
+    return {
+        "id": t.id,
+        "title": t.title,
+        "description": t.description,
+        "category_id": t.category_id,
+        "category_name": t.category_name,
+        "status": t.status,
+        "created_at": t.created_at,
+        "updated_at": t.updated_at,
+        "due_at_utc": t.due_at_utc,
+        "due_tz": t.due_tz,
+        "is_full_day": t.is_full_day,
+        "lead_time_minutes": t.lead_time_minutes,
+        "recurrence_rule": t.recurrence_rule,
+        "mirror_to_remote": t.mirror_to_remote,
+        "external_provider": t.external_provider,
+        "external_id": t.external_id,
+        "mirror_pending": t.mirror_pending,
+        "has_drift": t.external_updated_at == "!drift",
+        "reminder_fired": t.reminder_fired,
+    }
+
+
 class Api:
-    def get_tasks(self) -> list[dict]:
+    def get_tasks(self, include_done: bool = False) -> list[dict]:
         db = get_db()
-        tasks = db.list_tasks()
-        return [
-            {
-                "id": t.id,
-                "title": t.title,
-                "description": t.description,
-                "category_id": t.category_id,
-                "category_name": t.category_name,
-                "status": t.status,
-                "created_at": t.created_at,
-                "updated_at": t.updated_at,
-            }
-            for t in tasks
-        ]
+        tasks = db.list_tasks(include_done=include_done)
+        return [_task_to_dict(t) for t in tasks]
 
     def get_categories(self) -> list[dict[str, int | str]]:
         db = get_db()
@@ -54,21 +67,91 @@ class Api:
 
     def delete_task(self, task_id: int) -> None:
         db = get_db()
+        task = db.get_task(task_id)
+        if task and task.external_id:
+            remote_sync.mirror_delete(task_id)
         db.delete_task(task_id)
 
-    def create_task(self, title: str, category_id: int, description: str = "") -> int:
+    def complete_task(self, task_id: int) -> None:
         db = get_db()
-        return db.create_task(title, category_id, description)
+        task = db.get_task(task_id)
+        if task and task.external_id:
+            remote_sync.mirror_complete(task_id)
+        db.complete_task(task_id)
+
+    def create_task(
+        self,
+        title: str,
+        category_id: int,
+        description: str = "",
+        due_at_utc: str | None = None,
+        due_tz: str | None = None,
+        is_full_day: bool = False,
+        lead_time_minutes: int = 30,
+        recurrence_rule: str | None = None,
+        mirror_to_remote: bool = False,
+    ) -> int:
+        db = get_db()
+        task_id = db.create_task(
+            title, category_id, description,
+            due_at_utc=due_at_utc, due_tz=due_tz,
+            is_full_day=is_full_day, lead_time_minutes=lead_time_minutes,
+            recurrence_rule=recurrence_rule, mirror_to_remote=mirror_to_remote,
+        )
+        if mirror_to_remote:
+            remote_sync.mirror_create(task_id)
+        return task_id
 
     def update_task(self, task_id: int, title: str | None = None, description: str | None = None) -> bool:
         db = get_db()
-        return db.update_task(task_id, title=title, description=description)
+        updated = db.update_task(task_id, title=title, description=description)
+        if updated:
+            task = db.get_task(task_id)
+            if task and task.external_id:
+                remote_sync.mirror_update(task_id)
+        return updated
+
+    def update_task_due(
+        self,
+        task_id: int,
+        due_at_utc: str | None,
+        due_tz: str | None,
+        is_full_day: bool,
+        lead_time_minutes: int,
+        recurrence_rule: str | None = None,
+    ) -> None:
+        db = get_db()
+        db.update_task_due(task_id, due_at_utc, due_tz, is_full_day, lead_time_minutes, recurrence_rule)
+        task = db.get_task(task_id)
+        if task and task.external_id:
+            remote_sync.mirror_update(task_id)
+
+    def set_mirror(self, task_id: int, mirror: bool) -> None:
+        """Toggle mirroring for an existing task."""
+        db = get_db()
+        task = db.get_task(task_id)
+        if not task:
+            return
+        if mirror and not task.external_id:
+            db.set_mirror_toggle(task_id, True)
+            remote_sync.mirror_create(task_id)
+        elif not mirror and task.external_id:
+            remote_sync.mirror_delete(task_id)
+            db.set_mirror_toggle(task_id, False)
+
+    def get_pending_mirror_count(self) -> int:
+        return remote_sync.pending_count()
+
+    def get_archived_tasks(self, category_name: str | None = None, limit: int = 100, offset: int = 0) -> list[dict]:
+        return archive_mod.list_archived(category_name=category_name, limit=limit, offset=offset)
 
     def get_config(self) -> dict[str, Any]:
         config = get_config()
         return {
             "gemini_api_key": config.gemini_api_key,
             "hotkey": config.hotkey,
+            "remote_provider": config.remote_provider,
+            "connect_banner_dismissed": config.connect_banner_dismissed,
         }
 
     def save_config(self, gemini_api_key: str | None = None, hotkey: str | None = None) -> None:
@@ -78,11 +161,46 @@ class Api:
         if hotkey is not None:
             config.hotkey = hotkey
         config._save()
-        
+
         if hotkey is not None and _hotkey_listener:
             _hotkey_listener.rebind(hotkey)
-        
+
         logger.info("Config saved")
+
+    def dismiss_connect_banner(self) -> None:
+        config = get_config()
+        config.connect_banner_dismissed = True
+        config._save()
+
+    def connect_remote_provider(self, provider: str) -> dict[str, Any]:
+        """Start Google OAuth flow. Blocks until complete or fails."""
+        from voice_task_board import oauth
+        try:
+            tokens = oauth.start_google_oauth()
+            config = get_config()
+            config.remote_provider = "google"
+            config.remote_tokens = tokens
+            config.connect_banner_dismissed = True
+            config._save()
+            remote_sync.retry_pending()
+            remote_sync.check_drift_on_startup()
+            return {"ok": True}
+        except Exception as e:
+            logger.error(f"Google OAuth failed: {e}")
+            return {"ok": False, "error": str(e)}
+
+    def disconnect_remote_provider(self) -> None:
+        config = get_config()
+        config.remote_provider = None
+        config.remote_tokens = {}
+        config._save()
+
+    def submit_confirmation(self, action: str) -> None:
+        """Called from JS when user responds to the task confirmation overlay."""
+        global _confirmation_result, _confirmation_event
+        _confirmation_result = action
+        if _confirmation_event:
+            _confirmation_event.set()
 
     def test_gemini_key(self, api_key: str) -> bool:
         try:
@@ -118,11 +236,44 @@ class Api:
 
 _window: webview.Window | None = None
 _hotkey_listener: Any = None
+_confirmation_event: Any = None   # threading.Event, set by submit_confirmation
+_confirmation_result: str = "accept"  # 'accept' | 'edit' | 'cancel'
 
 
 def set_hotkey_listener(listener: Any) -> None:
     global _hotkey_listener
     _hotkey_listener = listener
+
+
+def show_confirmation(title: str, due: str | None, category: str, mirror: bool, timeout: int = 10) -> str:
+    """Show a confirmation overlay in the board window. Returns 'accept', 'edit', or 'cancel'."""
+    import threading
+    import json as _json
+
+    global _confirmation_event, _confirmation_result
+    _confirmation_event = threading.Event()
+    _confirmation_result = "accept"
+
+    if _window:
+        show_window()
+        payload = _json.dumps({
+            "title": title,
+            "due": due,
+            "category": category,
+            "mirror": mirror,
+            "timeout": timeout,
+        })
+        try:
+            _window.evaluate_js(f"window.__vtbShowConfirmation({payload})")
+        except Exception as e:
+            logger.warning(f"Could not inject confirmation overlay: {e}")
+            return "accept"
+
+    triggered = _confirmation_event.wait(timeout=timeout + 1)
+    _confirmation_event = None
+    if not triggered:
+        return "accept"
+    return _confirmation_result
 
 
 def _resolve_frontend_path() -> str:

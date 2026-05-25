@@ -5,6 +5,7 @@ import json
 import logging
 import re
 import struct
+from datetime import datetime, timezone
 
 import httpx
 from pydantic import ValidationError
@@ -88,7 +89,10 @@ class GeminiBackend:
         wav_b64 = base64.b64encode(wav_bytes).decode("utf-8")
 
         categories_json = json.dumps(categories, ensure_ascii=False)
-        system_prompt = load_prompt("intent_extraction").format(categories=categories_json)
+        current_utc = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S UTC")
+        system_prompt = load_prompt("intent_extraction").format(
+            categories=categories_json, current_utc=current_utc
+        )
 
         request_body = {
             "contents": [{
@@ -107,8 +111,14 @@ class GeminiBackend:
                         "content": {"type": "string"},
                         "category": {"type": "string"},
                         "transcription": {"type": "string"},
+                        "due_at": {"type": "string", "nullable": True},
+                        "is_full_day": {"type": "boolean"},
+                        "lead_time_minutes": {"type": "integer"},
+                        "recurrence_rule": {"type": "string", "nullable": True},
+                        "mirror_to_remote": {"type": "boolean"},
                     },
-                    "required": ["action", "title", "category", "transcription"],
+                    "required": ["action", "title", "category", "transcription",
+                                 "is_full_day", "lead_time_minutes", "mirror_to_remote"],
                 },
             },
         }

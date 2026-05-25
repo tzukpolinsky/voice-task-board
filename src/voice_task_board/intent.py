@@ -11,6 +11,11 @@ class FirstPassIntent(BaseModel):
     content: str = ""
     category: str
     transcription: str
+    due_at: str | None = None          # ISO 8601 date ("2026-05-28") or datetime ("2026-05-28T14:00:00")
+    is_full_day: bool = False
+    lead_time_minutes: int = 30
+    recurrence_rule: str | None = None  # e.g. "every weekday at 09:00" or None
+    mirror_to_remote: bool = False
 
 
 class ResolvedIntent(BaseModel):

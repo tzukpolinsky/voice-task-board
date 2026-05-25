@@ -11,13 +11,6 @@ def app_data_dir() -> Path:
     return Path(app_data) / "VoiceTaskBoard"
 
 
-def recordings_dir() -> Path:
-    path = app_data_dir() / "recordings"
-    path.mkdir(parents=True, exist_ok=True)
-    return path
-
-
-def models_dir() -> Path:
-    path = app_data_dir() / "models"
-    path.mkdir(parents=True, exist_ok=True)
-    return path
+def archive_db_path() -> Path:
+    app_data_dir().mkdir(parents=True, exist_ok=True)
+    return app_data_dir() / "archive.db"
