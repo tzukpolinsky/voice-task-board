@@ -1,9 +1,17 @@
 from __future__ import annotations
 
 import logging
+import os
 import sys
 import threading
 from typing import Any
+
+# Workaround for a WebView2 GPU/compositor race that surfaces as a native
+# AccessViolationException through the pywebview/pythonnet marshalling layer
+# and hard-crashes the process (taking the tray, hotkey listener, and scheduler
+# with it). See MicrosoftEdge/WebView2Feedback#5479. Re-test on WebView2 updates.
+# Override by setting WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS in the environment.
+os.environ.setdefault("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", "--disable-gpu")
 
 from voice_task_board.hotkey import HotkeyListener
 from voice_task_board.tray import create_tray_icon
@@ -87,8 +95,7 @@ def main() -> int:
                 logger.debug("record_in_background started")
                 if not config.gemini_api_key:
                     logger.error("Gemini API key not set")
-                    if _tray_icon:
-                        _tray_icon.notify("Set your Gemini API key in Settings")
+                    notif.show_status("Set your Gemini API key in Settings")
                     return
 
                 logger.info("Recording started")
@@ -123,8 +130,7 @@ def main() -> int:
                     )
 
                     if action == "cancel":
-                        if _tray_icon:
-                            _tray_icon.notify("Task discarded")
+                        notif.show_status("Task discarded")
                         return
 
                     if action == "edit":
@@ -136,8 +142,7 @@ def main() -> int:
                             mirror=intent.mirror_to_remote,
                         )
                         if edit_action == "cancel":
-                            if _tray_icon:
-                                _tray_icon.notify("Task discarded")
+                            notif.show_status("Task discarded")
                             return
 
                 logger.info("Applying intent to database")
@@ -155,20 +160,28 @@ def main() -> int:
                     msg = "✓ Deleted task"
                 elif result == ApplyResult.EDITED:
                     msg = "✓ Edited task"
+                    if task_id and config.remote_provider:
+                        task = db.get_task(task_id)
+                        if task and task.mirror_to_remote:
+                            if task.external_id:
+                                remote_sync.mirror_update(task_id)
+                            else:
+                                remote_sync.mirror_create(task_id)
                 elif result == ApplyResult.NO_MATCH:
                     msg = "✗ No matching task"
                 else:
                     msg = "? Could not understand"
 
-                if _tray_icon:
-                    _tray_icon.notify(msg)
+                if result in (ApplyResult.CREATED, ApplyResult.DELETED, ApplyResult.EDITED):
+                    webview_app.notify_data_changed()
+
+                notif.show_status(msg)
 
             except ValueError as e:
                 logger.info(f"Input error: {e}")
             except Exception as e:
                 logger.exception(f"Recording/intent/apply failed: {e}")
-                if _tray_icon:
-                    _tray_icon.notify(f"Error: {str(e)[:50]}")
+                notif.show_status(f"Error: {str(e)[:50]}")
             finally:
                 with _recording_lock:
                     _recording_active = False
@@ -188,8 +201,15 @@ def main() -> int:
         except Exception as e:
             logger.exception(f"Tray error: {e}")
 
-    tray_thread = threading.Thread(target=run_tray, name="tray", daemon=False)
+    # Daemon so that once main() returns, the process exits even if the tray
+    # icon's blocking run() loop is still running. Previously this was
+    # daemon=False, which combined with webview.start()'s blocking native loop
+    # made the process unkillable from Python — sched.stop() / hotkey.stop()
+    # in the finally block could never actually terminate.
+    tray_thread = threading.Thread(target=run_tray, name="tray", daemon=True)
     tray_thread.start()
+
+    _install_ctrl_c_handler()
 
     try:
         window = webview_app.create_window()
@@ -202,6 +222,108 @@ def main() -> int:
             _hotkey_listener.stop()
 
     return 0
+
+
+# Keep refs so the OS-held callback objects aren't GC'd, which would dangle a
+# pointer inside SetConsoleCtrlHandler and crash on Ctrl+C.
+_ctrl_handler_ref: Any = None
+_shutdown_in_progress = threading.Lock()
+
+
+def force_shutdown(reason: str = "shutdown") -> None:
+    """Single forceful shutdown path used by tray Quit and Ctrl+C.
+
+    Best-effort clean teardown of the scheduler, hotkey listener, and webview
+    window, followed by an unconditional os._exit(0). We cannot rely on the
+    main thread ever returning from webview.start() — window.destroy() is
+    known to hang under load on WebView2, and Python's default SIGINT handler
+    can't deliver to a main thread stuck in a native call. os._exit terminates
+    the process at the OS level, which:
+
+      - tears down WebView2 / pythonnet / pycaw COM state via process exit,
+      - kills the audio device handle even mid-recording,
+      - lets the OS reclaim file handles, sockets, and the SQLite WAL safely.
+
+    Safe to call from any thread, including the Win32 Ctrl handler thread or
+    the pystray tray thread. Idempotent — the first caller wins.
+    """
+    if not _shutdown_in_progress.acquire(blocking=False):
+        # Another caller is already tearing the process down; just block here
+        # until they call os._exit.
+        import time as _time
+        _time.sleep(5)
+        os._exit(0)
+        return
+
+    logger.info(f"Force shutdown: {reason}")
+    try:
+        sched.stop()
+    except Exception:
+        pass
+    try:
+        if _hotkey_listener is not None:
+            _hotkey_listener.stop()
+    except Exception:
+        pass
+    try:
+        if _tray_icon is not None:
+            _tray_icon.stop()
+    except Exception:
+        pass
+    try:
+        window = webview_app.get_window()
+        if window is not None:
+            window.destroy()
+    except Exception:
+        pass
+    # Give the above a brief moment for any in-flight work to finish, then nuke.
+    try:
+        import time as _time
+        _time.sleep(0.2)
+    except Exception:
+        pass
+    os._exit(0)
+
+
+def _install_ctrl_c_handler() -> None:
+    """Install a native Win32 console Ctrl+C handler.
+
+    Python's signal.SIGINT handler only fires between bytecode instructions on
+    the main thread. Since the main thread blocks inside webview.start()'s
+    native message loop, SIGINT is queued forever and Ctrl+C in the terminal
+    does nothing. Win32 console control handlers run on a separate OS-managed
+    thread, so they fire regardless of what the main thread is doing.
+
+    In a frozen --noconsole build there is no console attached, so
+    SetConsoleCtrlHandler returns 0 (we log at debug) and the handler is
+    simply never invoked — no leak, no extra cost. We still keep the function
+    pointer alive in `_ctrl_handler_ref` because the OS may hold a reference
+    to it for the process lifetime; that's a constant-size module global, not
+    a leak.
+    """
+    global _ctrl_handler_ref
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        HANDLER_ROUTINE = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.DWORD)
+
+        CTRL_C_EVENT = 0
+        CTRL_BREAK_EVENT = 1
+        CTRL_CLOSE_EVENT = 2
+
+        def _handler(ctrl_type: int) -> bool:
+            if ctrl_type not in (CTRL_C_EVENT, CTRL_BREAK_EVENT, CTRL_CLOSE_EVENT):
+                return False
+            force_shutdown(reason=f"ctrl event {ctrl_type}")
+            return True  # unreachable, but keeps type checker happy
+
+        _ctrl_handler_ref = HANDLER_ROUTINE(_handler)
+        ok = ctypes.windll.kernel32.SetConsoleCtrlHandler(_ctrl_handler_ref, True)
+        if not ok:
+            logger.debug("SetConsoleCtrlHandler returned 0 (no console attached?)")
+    except Exception as e:
+        logger.debug(f"Could not install Ctrl+C handler: {e!r}")
 
 
 if __name__ == "__main__":

@@ -142,16 +142,24 @@ def _show_reminder(task: Task) -> None:
 
     toast = Toast(text_fields=["Reminder", body])
     toast.duration = ToastDuration.Long
+    # Body-click activation on Win32 requires a registered NotificationActivator
+    # COM CLSID on the AUMID shortcut, which we don't ship. Buttons route
+    # through the in-process Activated event regardless, so "Open" is a button.
+    toast.AddAction(ToastButton(content="Open", arguments="open"))
     toast.AddAction(ToastButton(content="Snooze 10m", arguments="snooze"))
 
     dismissEvent = threading.Event()
 
     def _on_activated(event: Any) -> None:
+        args = (getattr(event, "arguments", "") or "")
         try:
-            if (getattr(event, "arguments", "") or "") == "snooze" and _snooze_callback:
+            if args == "snooze" and _snooze_callback:
                 _snooze_callback(task.id)
+            elif args == "open":
+                from voice_task_board import webview_app
+                webview_app.show_window()
         except Exception as e:
-            logger.warning(f"Snooze callback failed: {e}")
+            logger.warning(f"Toast activation handler failed: {e}")
         finally:
             _release_toast(toast)
             dismissEvent.set()
@@ -176,6 +184,63 @@ def _show_reminder(task: Task) -> None:
     except Exception as e:
         _release_toast(toast)
         logger.warning(f"Could not show reminder toast: {e}")
+
+
+def show_status(message: str) -> None:
+    """Show a brief status toast (e.g. "✓ Added: ...") with an Open button
+    that brings the dashboard to the foreground. Non-blocking.
+
+    Replaces pystray's notify() so the user can jump from the notification
+    into the app. Falls back to the tray balloon if windows-toasts is
+    unavailable.
+    """
+    threading.Thread(target=_show_status, args=(message,), daemon=True).start()
+
+
+def _show_status(message: str) -> None:
+    from windows_toasts import Toast, ToastButton, ToastDuration
+
+    toaster = _get_toaster()
+    if toaster is None:
+        return
+
+    toast = Toast(text_fields=[_APP_NAME, message])
+    toast.duration = ToastDuration.Short
+    toast.AddAction(ToastButton(content="Open", arguments="open"))
+
+    dismissEvent = threading.Event()
+
+    def _on_activated(event: Any) -> None:
+        args = (getattr(event, "arguments", "") or "")
+        try:
+            if args == "open":
+                from voice_task_board import webview_app
+                webview_app.show_window()
+        except Exception as e:
+            logger.warning(f"Status toast activation handler failed: {e}")
+        finally:
+            _release_toast(toast)
+            dismissEvent.set()
+
+    def _on_dismissed(_: Any) -> None:
+        _release_toast(toast)
+        dismissEvent.set()
+
+    def _on_failed(_e: Any) -> None:
+        _release_toast(toast)
+        dismissEvent.set()
+
+    toast.on_activated = _on_activated
+    toast.on_dismissed = _on_dismissed
+    toast.on_failed = _on_failed
+
+    _retain_toast(toast)
+    try:
+        toaster.show_toast(toast)
+        dismissEvent.wait()
+    except Exception as e:
+        _release_toast(toast)
+        logger.warning(f"Could not show status toast: {e}")
 
 
 def show_confirmation_toast(

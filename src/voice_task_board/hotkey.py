@@ -13,6 +13,7 @@ logger = logging.getLogger(__name__)
 HOTKEY_ID: Final[int] = 1
 _CLASS_NAME: Final[str] = "VoiceTaskBoardHotkeyWindow"
 _COMBO_MESSAGE: Final[int] = win32con.WM_APP + 1
+_MOD_NOREPEAT: Final[int] = 0x4000  # Win8+: suppress auto-repeat WM_HOTKEY
 
 _MOD_MAP = {"ctrl": win32con.MOD_CONTROL, "shift": win32con.MOD_SHIFT, "alt": win32con.MOD_ALT, "win": win32con.MOD_WIN}
 _KEY_MAP = {
@@ -102,7 +103,18 @@ class HotkeyListener:
             0,
             None,
         )
-        win32gui.RegisterHotKey(self._hwnd, HOTKEY_ID, self._mods, self._vk)
+        try:
+            win32gui.UnregisterHotKey(self._hwnd, HOTKEY_ID)
+        except win32gui.error:
+            pass
+        try:
+            win32gui.RegisterHotKey(self._hwnd, HOTKEY_ID, self._mods | _MOD_NOREPEAT, self._vk)
+        except win32gui.error as e:
+            self._ready.set()
+            if e.winerror == 1409:
+                logger.error("Hotkey '%s' is already registered by another process; hotkey unavailable.", self._combo)
+                return
+            raise
         self._ready.set()
         try:
             win32gui.PumpMessages()
@@ -140,7 +152,7 @@ class HotkeyListener:
     def _on_rebind_message(self, hwnd: int, msg: int, wparam: int, lparam: int) -> int:
         try:
             win32gui.UnregisterHotKey(self._hwnd, HOTKEY_ID)
-            win32gui.RegisterHotKey(self._hwnd, HOTKEY_ID, wparam, lparam)
+            win32gui.RegisterHotKey(self._hwnd, HOTKEY_ID, wparam | _MOD_NOREPEAT, lparam)
             self._mods = wparam
             self._vk = lparam
             logger.info("Hotkey rebound successfully")

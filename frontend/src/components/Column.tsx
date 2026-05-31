@@ -1,6 +1,9 @@
 import React, { useState } from 'react'
 import { useDroppable } from '@dnd-kit/core'
-import { Task, ArchivedTask, api } from '../api'
+import { Clipboard } from 'lucide-react'
+import type { Task, ArchivedTask } from '@/types/domain'
+import { api } from '@/api'
+import { useToast } from '@/context/ToastContext'
 import { TaskCard } from './TaskCard'
 
 interface ColumnProps {
@@ -11,6 +14,7 @@ interface ColumnProps {
 }
 
 export const Column: React.FC<ColumnProps> = ({ categoryId, categoryName, tasks, onTasksChange }) => {
+  const toast = useToast()
   const openTasks = tasks.filter(t => t.category_id === categoryId && t.status !== 'done')
   const doneTasks = tasks.filter(t => t.category_id === categoryId && t.status === 'done')
   const { setNodeRef, isOver } = useDroppable({ id: categoryId })
@@ -37,6 +41,7 @@ export const Column: React.FC<ColumnProps> = ({ categoryId, categoryName, tasks,
       onTasksChange()
     } catch (e) {
       console.error('Failed to create task', e)
+      toast.show(e instanceof Error ? e.message : 'Failed to create task')
     }
   }
 
@@ -52,6 +57,7 @@ export const Column: React.FC<ColumnProps> = ({ categoryId, categoryName, tasks,
       setShowArchived(true)
     } catch (e) {
       console.error('Failed to load archived tasks', e)
+      toast.show(e instanceof Error ? e.message : 'Failed to load archived tasks')
     } finally {
       setLoadingArchived(false)
     }
@@ -59,39 +65,45 @@ export const Column: React.FC<ColumnProps> = ({ categoryId, categoryName, tasks,
 
   const tabBtn = (active: boolean): React.CSSProperties => ({
     flex: 1,
-    padding: '4px 8px',
-    fontSize: '12px',
+    padding: 'var(--space-1) var(--space-2)',
+    fontSize: 'var(--text-sm)',
     fontWeight: active ? 600 : 400,
-    background: active ? '#2196F3' : '#e0e0e0',
-    color: active ? '#fff' : '#555',
+    background: active ? 'var(--color-accent)' : 'var(--color-border)',
+    color: active ? 'var(--color-surface)' : 'var(--color-text-secondary)',
     border: 'none',
     cursor: 'pointer',
-    borderRadius: '3px',
+    borderRadius: 'var(--radius-sm)',
   })
 
   return (
     <div
+      className="column"
       ref={setNodeRef}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       style={{
         flex: 1,
-        background: isOver ? '#e3f2fd' : '#f9f9f9',
-        borderRadius: '4px',
-        padding: '12px',
+        background: isOver ? 'var(--color-accent-bg)' : 'var(--color-surface-muted)',
+        borderRadius: 'var(--radius-md)',
+        padding: 'var(--space-3)',
         minHeight: '400px',
-        border: isOver ? '2px solid #2196F3' : '1px solid #e0e0e0',
+        border: isOver ? '2px solid var(--color-accent)' : '1px solid var(--color-border)',
         transition: 'all 0.2s ease',
         display: 'flex',
         flexDirection: 'column',
       }}
     >
-      <h3 style={{ marginBottom: '8px', fontSize: '14px', fontWeight: 600 }}>
-        {categoryName}
-      </h3>
+      <div className="column-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 'var(--space-2)' }}>
+        <h3 style={{ marginBottom: 0, fontSize: 'var(--text-md)', fontWeight: 600 }}>
+          {categoryName}
+        </h3>
+        <span className="column-count">
+          {tab === 'open' ? openTasks.length : doneTasks.length}
+        </span>
+      </div>
 
       {/* Tabs */}
-      <div style={{ display: 'flex', gap: '4px', marginBottom: '10px' }}>
+      <div style={{ display: 'flex', gap: 'var(--space-1)', marginBottom: 'var(--space-2)' }}>
         <button style={tabBtn(tab === 'open')} onClick={() => setTab('open')}>
           Open ({openTasks.length})
         </button>
@@ -102,7 +114,7 @@ export const Column: React.FC<ColumnProps> = ({ categoryId, categoryName, tasks,
 
       {tab === 'open' ? (
         <>
-          <div>
+          <div className="task-list">
             {openTasks.map(task => (
               <TaskCard key={task.id} task={task} onChanged={onTasksChange} />
             ))}
@@ -110,11 +122,11 @@ export const Column: React.FC<ColumnProps> = ({ categoryId, categoryName, tasks,
 
           {adding ? (
             <div style={{
-              background: '#fff',
-              border: '2px solid #2196F3',
-              borderRadius: '4px',
-              padding: '8px',
-              marginTop: '4px',
+              background: 'var(--color-surface)',
+              border: `2px solid var(--color-accent)`,
+              borderRadius: 'var(--radius-md)',
+              padding: 'var(--space-2)',
+              marginTop: 'var(--space-1)',
             }}>
               <input
                 autoFocus
@@ -129,10 +141,10 @@ export const Column: React.FC<ColumnProps> = ({ categoryId, categoryName, tasks,
                 placeholder="New task..."
                 style={{
                   width: '100%',
-                  padding: '6px',
+                  padding: 'var(--space-1)',
                   border: 'none',
                   outline: 'none',
-                  fontSize: '14px',
+                  fontSize: 'var(--text-md)',
                   boxSizing: 'border-box',
                 }}
               />
@@ -143,13 +155,13 @@ export const Column: React.FC<ColumnProps> = ({ categoryId, categoryName, tasks,
               title="Add task"
               style={{
                 marginTop: 'auto',
-                paddingTop: '20px',
-                paddingBottom: '20px',
+                paddingTop: 'var(--space-5)',
+                paddingBottom: 'var(--space-5)',
                 background: 'transparent',
-                border: '2px dashed #ccc',
-                borderRadius: '4px',
-                color: '#888',
-                fontSize: '24px',
+                border: '2px dashed var(--color-border-strong)',
+                borderRadius: 'var(--radius-md)',
+                color: 'var(--color-text-secondary)',
+                fontSize: 'var(--text-xl)',
                 cursor: 'pointer',
                 opacity: hovered ? 1 : 0,
                 transition: 'opacity 0.15s ease',
@@ -166,7 +178,7 @@ export const Column: React.FC<ColumnProps> = ({ categoryId, categoryName, tasks,
         /* Done tab */
         <div>
           {doneTasks.length === 0 && archivedTasks.length === 0 && (
-            <p style={{ fontSize: '12px', color: '#aaa', textAlign: 'center', padding: '20px 0' }}>
+            <p style={{ fontSize: 'var(--text-sm)', color: 'var(--color-text-faint)', textAlign: 'center', padding: 'var(--space-5) 0' }}>
               No completed tasks
             </p>
           )}
@@ -180,13 +192,13 @@ export const Column: React.FC<ColumnProps> = ({ categoryId, categoryName, tasks,
             disabled={loadingArchived}
             style={{
               width: '100%',
-              marginTop: '8px',
-              padding: '6px',
-              fontSize: '11px',
-              color: '#888',
+              marginTop: 'var(--space-2)',
+              padding: 'var(--space-1)',
+              fontSize: 'var(--text-xs)',
+              color: 'var(--color-text-secondary)',
               background: 'transparent',
-              border: '1px dashed #ccc',
-              borderRadius: '3px',
+              border: '1px dashed var(--color-border-strong)',
+              borderRadius: 'var(--radius-sm)',
               cursor: 'pointer',
             }}
           >
@@ -205,25 +217,25 @@ export const Column: React.FC<ColumnProps> = ({ categoryId, categoryName, tasks,
 const DoneCard: React.FC<{ task: Task; onChanged: () => void }> = ({ task }) => {
   return (
     <div style={{
-      background: '#f0f0f0',
-      border: '1px solid #ddd',
-      borderRadius: '4px',
-      padding: '10px 12px',
-      marginBottom: '6px',
+      background: 'var(--color-surface)',
+      border: '1px solid var(--color-border)',
+      borderRadius: 'var(--radius-md)',
+      padding: 'var(--space-2) var(--space-3)',
+      marginBottom: 'var(--space-1)',
       opacity: 0.8,
     }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', gap: '8px' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', gap: 'var(--space-2)' }}>
         <div style={{ flex: 1, minWidth: 0 }}>
-          <p style={{ fontWeight: 500, fontSize: '13px', textDecoration: 'line-through', color: '#666', marginBottom: '2px', wordBreak: 'break-word' }}>
+          <p style={{ fontWeight: 500, fontSize: 'var(--text-base)', textDecoration: 'line-through', color: 'var(--color-text-muted)', marginBottom: 'var(--space-1)', wordBreak: 'break-word' }}>
             {task.title}
           </p>
-          <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' }}>
-            <span style={{ fontSize: '11px', color: '#aaa' }}>
+          <div style={{ display: 'flex', gap: 'var(--space-1)', alignItems: 'center', flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-faint)' }}>
               {new Date(task.updated_at).toLocaleDateString()}
             </span>
             {task.mirror_to_remote && (
-              <span title={`Was mirrored to ${task.external_provider ?? 'remote'}`} style={{ fontSize: '11px', color: '#90a4ae' }}>
-                📋 {task.external_provider === 'google' ? 'Google' : task.external_provider === 'microsoft' ? 'Microsoft' : 'Remote'}
+              <span title={`Was mirrored to ${task.external_provider ?? 'remote'}`} style={{ fontSize: 'var(--text-xs)', color: 'var(--color-neutral)', display: 'flex', alignItems: 'center', gap: '3px' }}>
+                <Clipboard size={10} /> {task.external_provider === 'google' ? 'Google' : task.external_provider === 'microsoft' ? 'Microsoft' : 'Remote'}
               </span>
             )}
           </div>
@@ -235,23 +247,23 @@ const DoneCard: React.FC<{ task: Task; onChanged: () => void }> = ({ task }) => 
 
 const ArchivedCard: React.FC<{ task: ArchivedTask }> = ({ task }) => (
   <div style={{
-    background: '#fafafa',
-    border: '1px dashed #e0e0e0',
-    borderRadius: '4px',
-    padding: '8px 12px',
-    marginBottom: '4px',
+    background: 'var(--color-surface-alt)',
+    border: '1px dashed var(--color-border)',
+    borderRadius: 'var(--radius-md)',
+    padding: 'var(--space-2) var(--space-3)',
+    marginBottom: 'var(--space-1)',
     opacity: 0.6,
   }}>
-    <p style={{ fontWeight: 500, fontSize: '12px', color: '#888', textDecoration: 'line-through', marginBottom: '2px', wordBreak: 'break-word' }}>
+    <p style={{ fontWeight: 500, fontSize: 'var(--text-sm)', color: 'var(--color-text-secondary)', textDecoration: 'line-through', marginBottom: 'var(--space-1)', wordBreak: 'break-word' }}>
       {task.title}
     </p>
-    <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-      <span style={{ fontSize: '10px', color: '#bbb' }}>
+    <div style={{ display: 'flex', gap: 'var(--space-1)', flexWrap: 'wrap' }}>
+      <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-secondary)' }}>
         archived {new Date(task.archived_at).toLocaleDateString()}
       </span>
       {task.mirror_to_remote === 1 && (
-        <span style={{ fontSize: '10px', color: '#b0bec5' }}>
-          📋 {task.external_provider ?? 'remote'}
+        <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-tertiary)', display: 'flex', alignItems: 'center', gap: '3px' }}>
+          <Clipboard size={10} /> {task.external_provider ?? 'remote'}
         </span>
       )}
     </div>

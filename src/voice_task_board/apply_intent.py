@@ -101,7 +101,28 @@ def apply(first: FirstPassIntent, gemini: GeminiBackend) -> tuple[ApplyResult, i
             description=resolved.content,
             category_name=resolved.category,
         )
-        if updated:
+
+        # Layer-2 only resolves which task; schedule/mirror changes the user
+        # asked for live on the Layer-1 intent. Apply them here so "move task X
+        # to Thursday and mirror to calendar" actually updates due_at + mirror.
+        schedule_changed = False
+        if first.due_at:
+            due_at_utc, due_tz = _parse_due(first)
+            db.update_task_due(
+                resolved.target_id,
+                due_at_utc=due_at_utc,
+                due_tz=due_tz,
+                is_full_day=first.is_full_day,
+                lead_time_minutes=first.lead_time_minutes,
+                recurrence_rule=first.recurrence_rule,
+            )
+            schedule_changed = True
+
+        if first.mirror_to_remote:
+            db.set_mirror_toggle(resolved.target_id, True)
+            schedule_changed = True
+
+        if updated or schedule_changed:
             logger.info(f"Edited task {resolved.target_id}")
             return ApplyResult.EDITED, resolved.target_id
         logger.warning(f"Edit produced no changes on task {resolved.target_id}")

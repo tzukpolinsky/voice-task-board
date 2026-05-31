@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import httpx
 import logging
+import queue
 import sys
+import threading
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import webview
 
@@ -240,14 +242,90 @@ _confirmation_event: Any = None   # threading.Event, set by submit_confirmation
 _confirmation_result: str = "accept"  # 'accept' | 'edit' | 'cancel'
 
 
+# --- UI dispatcher --------------------------------------------------------
+# Concurrent calls into pywebview from multiple background threads (recording
+# thread, tray thread, scheduler thread) have surfaced as native access
+# violations in the pythonnet/WebView2 marshalling layer — see the comment at
+# the top of __main__.py. Routing every cross-thread WebView interaction
+# (_window.evaluate_js, _window.show/hide, ctypes window calls) through a
+# single worker thread serializes those calls and removes the multi-thread
+# concurrency that triggers the race. The worker itself is still not the
+# WebView2 UI thread (pywebview owns that), but pywebview marshals correctly
+# from one consistent foreign thread; what it cannot tolerate is N foreign
+# threads racing simultaneously.
+
+_ui_queue: "queue.Queue[Callable[[], None] | None]" = queue.Queue()
+_ui_worker_thread: threading.Thread | None = None
+_ui_worker_lock = threading.Lock()
+
+
+def _ui_worker_loop() -> None:
+    while True:
+        fn = _ui_queue.get()
+        if fn is None:
+            return
+        try:
+            fn()
+        except Exception:
+            logger.exception("UI worker task raised")
+
+
+def _ensure_ui_worker() -> None:
+    global _ui_worker_thread
+    with _ui_worker_lock:
+        if _ui_worker_thread is not None and _ui_worker_thread.is_alive():
+            return
+        _ui_worker_thread = threading.Thread(
+            target=_ui_worker_loop, name="vtb-ui-worker", daemon=True
+        )
+        _ui_worker_thread.start()
+
+
+def _post_to_ui(fn: Callable[[], None]) -> None:
+    """Fire-and-forget: run fn on the UI worker thread."""
+    _ensure_ui_worker()
+    _ui_queue.put(fn)
+
+
+def _run_on_ui_sync(fn: Callable[[], Any], timeout: float = 10.0) -> Any:
+    """Run fn on the UI worker thread and wait for it to finish (or timeout).
+
+    Returns the function's return value, or None on timeout / exception.
+    """
+    _ensure_ui_worker()
+    done = threading.Event()
+    box: dict[str, Any] = {}
+
+    def runner() -> None:
+        try:
+            box["result"] = fn()
+        except Exception as e:
+            box["error"] = e
+        finally:
+            done.set()
+
+    _ui_queue.put(runner)
+    if not done.wait(timeout=timeout):
+        logger.warning("UI sync call timed out")
+        return None
+    if "error" in box:
+        logger.warning(f"UI sync call raised: {box['error']!r}")
+        return None
+    return box.get("result")
+# --- end UI dispatcher ----------------------------------------------------
+
+
 def set_hotkey_listener(listener: Any) -> None:
     global _hotkey_listener
     _hotkey_listener = listener
 
 
 def show_confirmation(title: str, due: str | None, category: str, mirror: bool, timeout: int = 10) -> str:
-    """Show a confirmation overlay in the board window. Returns 'accept', 'edit', or 'cancel'."""
-    import threading
+    """Show a confirmation overlay in the board window. Returns 'accept', 'edit', or 'cancel'.
+
+    The wait for the user's response stays on the caller's thread; only the
+    show + evaluate_js dispatch runs on the UI worker.
+    """
     import json as _json
 
     global _confirmation_event, _confirmation_result
@@ -255,7 +333,6 @@ def show_confirmation(title: str, due: str | None, category: str, mirror: bool, 
     _confirmation_result = "accept"
 
     if _window:
-        show_window()
         payload = _json.dumps({
             "title": title,
             "due": due,
@@ -263,11 +340,15 @@ def show_confirmation(title: str, due: str | None, category: str, mirror: bool, 
             "mirror": mirror,
             "timeout": timeout,
         })
-        try:
-            _window.evaluate_js(f"window.__vtbShowConfirmation({payload})")
-        except Exception as e:
-            logger.warning(f"Could not inject confirmation overlay: {e}")
-            return "accept"
+
+        def _dispatch() -> None:
+            show_window()
+            try:
+                _window.evaluate_js(f"window.__vtbShowConfirmation({payload})")
+            except Exception as e:
+                logger.warning(f"Could not inject confirmation overlay: {e}")
+
+        _post_to_ui(_dispatch)
 
     triggered = _confirmation_event.wait(timeout=timeout + 1)
     _confirmation_event = None
@@ -323,19 +404,51 @@ def get_window() -> webview.Window | None:
     return _window
 
 
+def notify_data_changed() -> None:
+    """Signal the frontend to reload its data. Routed via the UI worker."""
+    if _window is None:
+        return
+
+    def _dispatch() -> None:
+        try:
+            _window.evaluate_js("window.__vtbDataChanged && window.__vtbDataChanged()")
+        except Exception as e:
+            logger.debug(f"Could not notify frontend of data change: {e}")
+
+    _post_to_ui(_dispatch)
+
+
 def hide_window() -> None:
     if _window is None:
         return
-    try:
-        _window.hide()
-    except Exception as e:
-        logger.debug(f"Failed to hide window: {e}")
+
+    def _dispatch() -> None:
+        try:
+            _window.hide()
+        except Exception as e:
+            logger.debug(f"Failed to hide window: {e}")
+
+    _post_to_ui(_dispatch)
 
 
 def show_window() -> None:
-    global _window
+    """Show the board window and bring it to the foreground.
+
+    Internal callers already on the UI worker (e.g. show_confirmation's
+    dispatch closure) call this directly; external callers from background
+    threads (tray click handler, etc.) route through _post_to_ui so the
+    actual _window.show() / ctypes calls always run on the UI worker.
+    """
     if _window is None:
         return
+
+    if threading.current_thread() is _ui_worker_thread:
+        _show_window_impl()
+    else:
+        _post_to_ui(_show_window_impl)
+
+
+def _show_window_impl() -> None:
     try:
         _window.show()
         _apply_window_icon()

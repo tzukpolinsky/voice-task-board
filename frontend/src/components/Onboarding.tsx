@@ -41,9 +41,8 @@ export const Onboarding: React.FC<OnboardingProps> = ({ isOpen, onComplete }) =>
   }
 
   const handleOpenApiUrl = () => {
-    const webview = (window as any).pywebview
-    if (webview?.api?.open_url) {
-      webview.api.open_url('https://aistudio.google.com/apikey')
+    if (window.pywebview?.api?.open_url) {
+      window.pywebview.api.open_url('https://aistudio.google.com/apikey')
     } else {
       window.open('https://aistudio.google.com/apikey', '_blank')
     }
@@ -52,35 +51,17 @@ export const Onboarding: React.FC<OnboardingProps> = ({ isOpen, onComplete }) =>
   if (!isOpen) return null
 
   return (
-    <div style={{
-      position: 'fixed',
-      top: 0,
-      left: 0,
-      right: 0,
-      bottom: 0,
-      background: '#f5f5f5',
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      zIndex: 2000,
-    }}>
-      <div style={{
-        background: '#fff',
-        borderRadius: '8px',
-        padding: '40px',
-        maxWidth: '500px',
-        textAlign: 'center',
-        boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
-      }}>
-        <h1 style={{ marginBottom: '16px', fontSize: '28px' }}>Welcome to Voice Task Board</h1>
-        <p style={{ marginBottom: '24px', color: '#666' }}>
+    <div className="onboarding">
+      <h1>Welcome to Voice Task Board</h1>
+      <div style={{ textAlign: 'left', maxWidth: '440px' }}>
+        <p style={{ marginBottom: '24px' }}>
           To get started, you need a Gemini API key. Get one free at{' '}
           <button
             onClick={handleOpenApiUrl}
             style={{
               background: 'none',
               border: 'none',
-              color: '#2196F3',
+              color: 'var(--color-primary)',
               textDecoration: 'underline',
               cursor: 'pointer',
               fontSize: 'inherit',
@@ -92,7 +73,7 @@ export const Onboarding: React.FC<OnboardingProps> = ({ isOpen, onComplete }) =>
           </button>
         </p>
 
-        <div style={{ marginBottom: '20px', textAlign: 'left' }}>
+        <div style={{ marginBottom: '20px' }}>
           <label style={{ display: 'block', marginBottom: '8px', fontWeight: 500 }}>Paste your API key:</label>
           <input
             type="password"
@@ -102,7 +83,7 @@ export const Onboarding: React.FC<OnboardingProps> = ({ isOpen, onComplete }) =>
             style={{
               width: '100%',
               padding: '12px',
-              border: '1px solid #ddd',
+              border: '1px solid var(--color-border-strong)',
               borderRadius: '4px',
               fontFamily: 'monospace',
               fontSize: '12px',
@@ -116,8 +97,8 @@ export const Onboarding: React.FC<OnboardingProps> = ({ isOpen, onComplete }) =>
           style={{
             marginBottom: '16px',
             padding: '10px 20px',
-            background: '#4CAF50',
-            color: '#fff',
+            background: 'var(--color-success)',
+            color: 'var(--color-surface)',
             border: 'none',
             borderRadius: '4px',
             cursor: 'pointer',
@@ -132,7 +113,7 @@ export const Onboarding: React.FC<OnboardingProps> = ({ isOpen, onComplete }) =>
           <p style={{
             marginBottom: '16px',
             fontSize: '14px',
-            color: testResult.includes('valid') ? '#4CAF50' : '#f44',
+            color: testResult.includes('valid') ? 'var(--color-success)' : 'var(--color-danger)',
           }}>
             {testResult}
           </p>
@@ -141,16 +122,10 @@ export const Onboarding: React.FC<OnboardingProps> = ({ isOpen, onComplete }) =>
         <button
           onClick={handleComplete}
           disabled={!apiKey.trim()}
+          className="onboarding-btn btn-primary"
           style={{
             padding: '12px 24px',
-            background: '#2196F3',
-            color: '#fff',
-            border: 'none',
-            borderRadius: '4px',
-            cursor: 'pointer',
-            fontSize: '14px',
-            fontWeight: 500,
-            opacity: apiKey.trim() ? 1 : 0.5,
+            width: '100%',
           }}
         >
           Get Started

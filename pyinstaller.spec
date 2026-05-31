@@ -9,7 +9,6 @@ a = Analysis(
     ],
     hiddenimports=[
         'pystray._win32',
-        'onnxruntime',
         'sounddevice',
         'pycaw',
         'pycaw.pycaw',

@@ -12,7 +12,6 @@ dependencies = [
   "Pillow>=10.0",
   "sounddevice>=0.4.6",
   "numpy>=1.26",
-  "onnxruntime>=1.17",
   "httpx>=0.27",
   "pydantic>=2.5",
   "pywebview>=5.0",
@@ -39,5 +38,5 @@ strict = true
 warn_unused_configs = true
 
 [[tool.mypy.overrides]]
-module = ["win32api", "win32con", "win32gui", "pystray", "onnxruntime", "sounddevice", "pycaw", "pycaw.pycaw", "comtypes", "comtypes.client", "windows_toasts"]
+module = ["win32api", "win32con", "win32gui", "pystray", "sounddevice", "pycaw", "pycaw.pycaw", "comtypes", "comtypes.client", "windows_toasts"]
 ignore_missing_imports = true

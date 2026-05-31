@@ -1,7 +1,11 @@
 import React, { useState } from 'react'
 import { useDraggable } from '@dnd-kit/core'
 import { CSS } from '@dnd-kit/utilities'
-import { Task, api } from '../api'
+import { Pencil, Check, Cloud, CloudOff, Trash2, X, Clock, Repeat, AlertTriangle, Loader } from 'lucide-react'
+import type { Task } from '@/types/domain'
+import { api } from '@/api'
+import { useToast } from '@/context/ToastContext'
+import { formatDue, toLocalInput, isDueSoon, isOverdue } from './TaskCard.helpers'
 
 interface TaskCardProps {
   task: Task
@@ -14,44 +18,8 @@ const stopDrag = {
   onKeyDown: (e: React.KeyboardEvent) => e.stopPropagation(),
 }
 
-function formatDue(task: Task): string | null {
-  if (!task.due_at_utc) return null
-  try {
-    if (task.is_full_day) return task.due_at_utc.slice(0, 10)
-    const d = new Date(task.due_at_utc.endsWith('Z') ? task.due_at_utc : task.due_at_utc + 'Z')
-    return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
-  } catch { return null }
-}
-
-function toLocalInput(task: Task): string {
-  if (!task.due_at_utc) return ''
-  if (task.is_full_day) return task.due_at_utc.slice(0, 10)
-  try {
-    const d = new Date(task.due_at_utc.endsWith('Z') ? task.due_at_utc : task.due_at_utc + 'Z')
-    // shift to local time for datetime-local input
-    const local = new Date(d.getTime() - d.getTimezoneOffset() * 60000)
-    return local.toISOString().slice(0, 16)
-  } catch { return '' }
-}
-
-function isDueSoon(task: Task): boolean {
-  if (!task.due_at_utc || task.is_full_day) return false
-  try {
-    const due = new Date(task.due_at_utc.endsWith('Z') ? task.due_at_utc : task.due_at_utc + 'Z')
-    const diff = due.getTime() - Date.now()
-    return diff > 0 && diff < task.lead_time_minutes * 60 * 1000 * 2
-  } catch { return false }
-}
-
-function isOverdue(task: Task): boolean {
-  if (!task.due_at_utc) return false
-  try {
-    const due = new Date(task.due_at_utc.endsWith('Z') ? task.due_at_utc : task.due_at_utc + 'Z')
-    return due.getTime() < Date.now()
-  } catch { return false }
-}
-
 export const TaskCard: React.FC<TaskCardProps> = ({ task, onChanged }) => {
+  const toast = useToast()
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
     id: task.id,
   })
@@ -75,12 +43,12 @@ export const TaskCard: React.FC<TaskCardProps> = ({ task, onChanged }) => {
   const dueLabel = formatDue(task)
 
   const borderColor = task.has_drift
-    ? '#ff9800'
+    ? 'var(--color-warning)'
     : overdue
-    ? '#f44336'
+    ? 'var(--color-danger)'
     : dueSoon
-    ? '#ff9800'
-    : '#ddd'
+    ? 'var(--color-warning)'
+    : 'var(--color-border-strong)'
 
   const openEdit = () => {
     setTitle(task.title)
@@ -98,6 +66,7 @@ export const TaskCard: React.FC<TaskCardProps> = ({ task, onChanged }) => {
       onChanged()
     } catch (e) {
       console.error('Failed to delete task', e)
+      toast.show(e instanceof Error ? e.message : 'Failed to delete task')
     }
   }
 
@@ -107,6 +76,7 @@ export const TaskCard: React.FC<TaskCardProps> = ({ task, onChanged }) => {
       onChanged()
     } catch (e) {
       console.error('Failed to complete task', e)
+      toast.show(e instanceof Error ? e.message : 'Failed to complete task')
     }
   }
 
@@ -139,6 +109,7 @@ export const TaskCard: React.FC<TaskCardProps> = ({ task, onChanged }) => {
       onChanged()
     } catch (e) {
       console.error('Failed to update task', e)
+      toast.show(e instanceof Error ? e.message : 'Failed to update task')
     }
   }
 
@@ -155,22 +126,26 @@ export const TaskCard: React.FC<TaskCardProps> = ({ task, onChanged }) => {
       onChanged()
     } catch (e) {
       console.error('Failed to toggle mirror', e)
+      toast.show(e instanceof Error ? e.message : 'Failed to toggle mirror')
     } finally {
       setTogglingMirror(false)
     }
   }
 
+  const stateClass = task.has_drift || overdue ? 'priority-high' : dueSoon ? 'priority-due' : ''
+
   return (
     <div
+      className={`task-card ${stateClass}`}
       ref={setNodeRef}
       style={{
         ...style,
-        background: '#fff',
+        background: 'var(--color-surface)',
         border: `1px solid ${borderColor}`,
-        borderRadius: '4px',
-        padding: '12px',
-        marginBottom: '8px',
-        boxShadow: isDragging ? '0 4px 12px rgba(0,0,0,0.2)' : '0 1px 3px rgba(0,0,0,0.1)',
+        borderRadius: 'var(--radius-md)',
+        padding: 'var(--space-3)',
+        marginBottom: 'var(--space-2)',
+        boxShadow: isDragging ? 'var(--shadow-card-drag)' : 'var(--shadow-card)',
         cursor: editing ? 'default' : 'grab',
       }}
       {...(editing ? {} : attributes)}
@@ -201,14 +176,14 @@ export const TaskCard: React.FC<TaskCardProps> = ({ task, onChanged }) => {
 
           {/* Due date row */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px', flexWrap: 'wrap' }}>
-            <label style={{ fontSize: '12px', color: '#555', flexShrink: 0 }}>Due:</label>
+            <label style={{ fontSize: '12px', color: 'var(--color-text-secondary)', flexShrink: 0 }}>Due:</label>
             <input
               type={isFullDayEdit ? 'date' : 'datetime-local'}
               value={dueInput}
               onChange={(e) => setDueInput(e.target.value)}
-              style={{ fontSize: '12px', padding: '4px 6px', border: '1px solid #ddd', borderRadius: '3px', flex: 1, minWidth: 0 }}
+              style={{ fontSize: '12px', padding: '4px 6px', border: '1px solid var(--color-border-strong)', borderRadius: '3px', flex: 1, minWidth: 0 }}
             />
-            <label style={{ fontSize: '12px', color: '#555', display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0 }}>
+            <label style={{ fontSize: '12px', color: 'var(--color-text-secondary)', display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0 }}>
               <input
                 type="checkbox"
                 checked={isFullDayEdit}
@@ -224,9 +199,9 @@ export const TaskCard: React.FC<TaskCardProps> = ({ task, onChanged }) => {
               <button
                 onClick={() => setDueInput('')}
                 title="Clear due date"
-                style={{ fontSize: '11px', padding: '2px 6px', background: '#eee', border: '1px solid #ccc', borderRadius: '3px', cursor: 'pointer' }}
+                style={{ fontSize: '11px', padding: '2px 6px', background: 'var(--color-surface-alt)', border: '1px solid var(--color-border-strong)', borderRadius: '3px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', lineHeight: 1 }}
               >
-                ✕
+                <X size={12} />
               </button>
             )}
           </div>
@@ -234,11 +209,11 @@ export const TaskCard: React.FC<TaskCardProps> = ({ task, onChanged }) => {
           {/* Lead time — only when due date is set */}
           {dueInput && (
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
-              <label style={{ fontSize: '12px', color: '#555', flexShrink: 0 }}>Remind:</label>
+              <label style={{ fontSize: '12px', color: 'var(--color-text-secondary)', flexShrink: 0 }}>Remind:</label>
               <select
                 value={leadTimeEdit}
                 onChange={(e) => setLeadTimeEdit(Number(e.target.value))}
-                style={{ fontSize: '12px', padding: '4px 6px', border: '1px solid #ddd', borderRadius: '3px' }}
+                style={{ fontSize: '12px', padding: '4px 6px', border: '1px solid var(--color-border-strong)', borderRadius: '3px' }}
               >
                 <option value={10}>10 min before</option>
                 <option value={15}>15 min before</option>
@@ -252,71 +227,71 @@ export const TaskCard: React.FC<TaskCardProps> = ({ task, onChanged }) => {
 
           {/* Recurrence */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
-            <label style={{ fontSize: '12px', color: '#555', flexShrink: 0 }}>Repeat:</label>
+            <label style={{ fontSize: '12px', color: 'var(--color-text-muted)', flexShrink: 0 }}>Repeat:</label>
             <input
               type="text"
               value={recurrenceEdit}
               onChange={(e) => setRecurrenceEdit(e.target.value)}
               placeholder="e.g. every day, every monday at 09:00"
-              style={{ fontSize: '12px', padding: '4px 6px', border: '1px solid #ddd', borderRadius: '3px', flex: 1 }}
+              style={{ fontSize: '12px', padding: '4px 6px', border: '1px solid var(--color-border-strong)', borderRadius: '3px', flex: 1 }}
             />
           </div>
 
           <div style={{ display: 'flex', gap: '4px', justifyContent: 'flex-end' }}>
-            <button onClick={handleCancel} style={btn('#ccc', '#000')}>Cancel</button>
-            <button onClick={handleSave} style={btn('#2196F3', '#fff')}>Save</button>
+            <button onClick={handleCancel} className="btn-secondary">Cancel</button>
+            <button onClick={handleSave} className="btn-primary">Save</button>
           </div>
         </div>
       ) : (
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', gap: '8px' }}>
           <div style={{ flex: 1, minWidth: 0 }}>
-            <p style={{ fontWeight: 500, marginBottom: '4px', wordBreak: 'break-word' }}>{task.title}</p>
+            <p className="task-card-title">{task.title}</p>
             {task.description && (
-              <p style={{ fontSize: '12px', color: '#444', marginBottom: '4px', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+              <p className="task-card-description">
                 {task.description}
               </p>
             )}
 
             {/* Due date row */}
             {dueLabel && (
-              <p style={{ fontSize: '11px', color: overdue ? '#f44336' : dueSoon ? '#ff9800' : '#666', marginBottom: '2px', fontWeight: overdue || dueSoon ? 600 : 400 }}>
-                ⏰ {dueLabel}
-                {task.recurrence_rule && <span title={task.recurrence_rule}> ↻ {task.recurrence_rule}</span>}
+              <p className="task-card-due" style={{ fontSize: '11px', color: overdue ? 'var(--color-danger)' : dueSoon ? 'var(--color-warning)' : 'var(--color-text-muted)', marginBottom: '2px', fontWeight: overdue || dueSoon ? 600 : 400, display: 'flex', alignItems: 'center', gap: '4px' }}>
+                <Clock size={12} /> {dueLabel}
+                {task.recurrence_rule && <span title={task.recurrence_rule} style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><Repeat size={12} /> {task.recurrence_rule}</span>}
               </p>
             )}
 
             {/* Status badges */}
-            <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap', marginTop: '2px' }}>
+            <div className="task-card-tags" style={{ display: 'flex', gap: '4px', flexWrap: 'wrap', marginTop: '2px' }}>
               {task.has_drift && (
-                <span title="Remote task differs from local" style={badge('#ff9800')}>⚠ remote differs</span>
+                <span className="task-card-tag task-card-tag--warning" title="Remote task differs from local"><AlertTriangle size={12} /> remote differs</span>
               )}
               {task.mirror_pending && (
-                <span title="Waiting to sync to remote" style={badge('#90a4ae')}>⏳ sync pending</span>
+                <span className="task-card-tag task-card-tag--neutral" title="Waiting to sync to remote"><Loader size={12} /> sync pending</span>
               )}
               {task.mirror_to_remote && !task.mirror_pending && task.external_id && (
-                <span title={`Mirrored to ${task.external_provider}`} style={badge('#4caf50')}>
-                  {task.external_provider === 'google' ? '☁ Google' : '☁ Remote'}
+                <span className="task-card-tag task-card-tag--success" title={`Mirrored to ${task.external_provider}`}>
+                  <Cloud size={12} /> {task.external_provider === 'google' ? 'Google' : 'Remote'}
                 </span>
               )}
             </div>
 
-            <p style={{ fontSize: '11px', color: '#bbb', marginTop: '4px' }}>
+            <p style={{ fontSize: '11px', color: 'var(--color-text-faint)', marginTop: '4px' }}>
               {new Date(task.created_at).toLocaleDateString()}
             </p>
           </div>
 
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', flexShrink: 0 }} {...stopDrag}>
-            <button onClick={openEdit} title="Edit" style={btn('#2196F3', '#fff')}>✎</button>
-            <button onClick={handleComplete} title="Mark done" style={btn('#4CAF50', '#fff')}>✓</button>
+          <div className="task-card-actions" style={{ display: 'flex', flexDirection: 'column', gap: '4px', flexShrink: 0 }} {...stopDrag}>
+            <button className="task-card-action task-card-action--primary" onClick={openEdit} title="Edit"><Pencil size={14} /></button>
+            <button className="task-card-action task-card-action--success" onClick={handleComplete} title="Mark done"><Check size={14} /></button>
             <button
+              className="task-card-action task-card-action--mirror"
               onClick={handleToggleMirror}
               disabled={togglingMirror}
               title={task.mirror_to_remote ? 'Remove from remote' : 'Mirror to remote'}
-              style={btn(task.mirror_to_remote ? '#90a4ae' : '#78909c', '#fff')}
             >
-              {task.mirror_to_remote ? '☁' : '⊙'}
+              {task.mirror_to_remote ? <Cloud size={14} /> : <CloudOff size={14} />}
             </button>
-            <button onClick={handleDelete} title="Delete" style={btn('#ff4444', '#fff')}>×</button>
+            <button className="task-card-action task-card-action--danger" onClick={handleDelete} title="Delete"><Trash2 size={14} /></button>
           </div>
         </div>
       )}
@@ -329,7 +304,7 @@ const inputStyle: React.CSSProperties = {
   padding: '6px',
   fontSize: '14px',
   fontWeight: 500,
-  border: '1px solid #2196F3',
+  border: '1px solid var(--color-accent)',
   borderRadius: '3px',
   marginBottom: '6px',
   boxSizing: 'border-box',
@@ -339,7 +314,7 @@ const textareaStyle: React.CSSProperties = {
   width: '100%',
   padding: '6px',
   fontSize: '12px',
-  border: '1px solid #ddd',
+  border: '1px solid var(--color-border-strong)',
   borderRadius: '3px',
   marginBottom: '6px',
   boxSizing: 'border-box',
@@ -347,22 +322,4 @@ const textareaStyle: React.CSSProperties = {
   fontFamily: 'inherit',
 }
 
-const btn = (bg: string, color: string): React.CSSProperties => ({
-  background: bg,
-  color,
-  border: 'none',
-  borderRadius: '3px',
-  padding: '4px 8px',
-  fontSize: '12px',
-  cursor: 'pointer',
-  lineHeight: 1,
-})
 
-const badge = (color: string): React.CSSProperties => ({
-  fontSize: '10px',
-  padding: '1px 5px',
-  borderRadius: '8px',
-  background: color,
-  color: '#fff',
-  fontWeight: 500,
-})

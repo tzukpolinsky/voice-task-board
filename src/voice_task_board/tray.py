@@ -21,11 +21,14 @@ def create_tray_icon() -> pystray.Icon:
             logger.error(f"Failed to open window: {e}")
 
     def on_quit(selected_icon: pystray.Icon, __: pystray.MenuItem) -> None:
-        from voice_task_board import webview_app
-        window = webview_app.get_window()
-        if window:
-            window.destroy()
-        selected_icon.stop()
+        # Route through the shared forceful-shutdown path so prod users
+        # (clicking tray Quit) get the same os._exit(0) termination as
+        # Ctrl+C in dev. window.destroy() + icon.stop() alone would leave
+        # the process alive if WebView2 hangs on destroy — which has
+        # happened — and would leak the audio device, pycaw COM pointers,
+        # and the WebView2 background process.
+        from voice_task_board.__main__ import force_shutdown
+        force_shutdown(reason="tray quit")
 
     icon.menu = pystray.Menu(
         pystray.MenuItem("Open", on_open, default=True),

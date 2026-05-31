@@ -1,5 +1,7 @@
 import React, { useState, useRef } from 'react'
-import { api, Category } from '../api'
+import { Cloud, Link } from 'lucide-react'
+import type { Category } from '@/types/domain'
+import { api } from '@/api'
 
 // ── Remote provider section ──────────────────────────────────────────────────
 
@@ -33,28 +35,28 @@ const RemoteSection: React.FC<{ provider: string | null; onChanged: () => void }
     <div style={{ marginBottom: '16px' }}>
       <label style={{ display: 'block', marginBottom: '8px', fontWeight: 500 }}>Remote Reminders</label>
       {provider ? (
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px', background: '#e8f5e9', borderRadius: '4px', fontSize: '13px' }}>
-          <span style={{ flex: 1 }}>☁ Connected to <strong>Google Tasks</strong></span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px', background: 'var(--color-success-bg)', borderRadius: '4px', fontSize: '13px' }}>
+          <span style={{ flex: 1, display: 'flex', alignItems: 'center', gap: '6px' }}><Cloud size={16} /> Connected to <strong>Google Tasks</strong></span>
           <button
             onClick={handleDisconnect}
-            style={{ padding: '4px 10px', background: '#ff4444', color: '#fff', border: 'none', borderRadius: '3px', cursor: 'pointer', fontSize: '12px' }}
+            style={{ padding: '4px 10px', background: 'var(--color-danger-strong)', color: 'var(--color-surface)', border: 'none', borderRadius: '3px', cursor: 'pointer', fontSize: '12px' }}
           >
             Disconnect
           </button>
         </div>
       ) : (
         <div>
-          <p style={{ fontSize: '12px', color: '#666', marginBottom: '8px' }}>
+          <p style={{ fontSize: '12px', color: 'var(--color-text-muted)', marginBottom: '8px' }}>
             Mirror tasks to Google Tasks so they appear on your phone.
           </p>
           <button
             onClick={() => handleConnect('google')}
             disabled={connecting}
-            style={{ width: '100%', padding: '10px', background: '#4285F4', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '13px', fontWeight: 500 }}
+            style={{ width: '100%', padding: '10px', background: '#4285F4', color: 'var(--color-surface)', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '13px', fontWeight: 500, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}
           >
-            {connecting ? 'Opening browser...' : '🔗 Connect Google Tasks'}
+            <Link size={16} /> {connecting ? 'Opening browser...' : 'Connect Google Tasks'}
           </button>
-          {error && <p style={{ marginTop: '6px', fontSize: '12px', color: '#f44' }}>{error}</p>}
+          {error && <p style={{ marginTop: '6px', fontSize: '12px', color: 'var(--color-danger-strong)' }}>{error}</p>}
         </div>
       )}
     </div>
@@ -117,9 +119,9 @@ const HotkeyCapture: React.FC<{ value: string; onChange: (v: string) => void }> 
         style={{
           flex: 1,
           padding: '8px',
-          border: capturing ? '2px solid #2196F3' : '1px solid #ddd',
+          border: capturing ? '2px solid var(--color-accent)' : '1px solid var(--color-border-strong)',
           borderRadius: '4px',
-          background: capturing ? '#e3f2fd' : '#fff',
+          background: capturing ? 'var(--color-accent-bg)' : 'var(--color-surface)',
           cursor: 'pointer',
           fontFamily: 'monospace',
         }}
@@ -128,8 +130,8 @@ const HotkeyCapture: React.FC<{ value: string; onChange: (v: string) => void }> 
         onClick={() => inputRef.current?.focus()}
         style={{
           padding: '8px 12px',
-          background: '#2196F3',
-          color: '#fff',
+          background: 'var(--color-accent)',
+          color: 'var(--color-surface)',
           border: 'none',
           borderRadius: '4px',
           cursor: 'pointer',
@@ -162,9 +164,11 @@ export const Settings: React.FC<SettingsProps> = ({ isOpen, onClose, onConfigCha
       const pywebview = window.pywebview
       if (pywebview?.api.get_config) {
         const config = await pywebview.api.get_config()
-        setApiKey(config.gemini_api_key || '')
-        setHotkey(config.hotkey || 'ctrl+shift+space')
-        setRemoteProvider(config.remote_provider ?? null)
+        if (config) {
+          setApiKey(config.gemini_api_key || '')
+          setHotkey(config.hotkey || 'ctrl+shift+space')
+          setRemoteProvider(config.remote_provider ?? null)
+        }
       }
       const cats = await api.getCategories()
       setCategories(cats || [])
@@ -223,40 +227,18 @@ export const Settings: React.FC<SettingsProps> = ({ isOpen, onClose, onConfigCha
   if (!isOpen) return null
 
   return (
-    <div style={{
-      position: 'fixed',
-      top: 0,
-      left: 0,
-      right: 0,
-      bottom: 0,
-      background: 'rgba(0,0,0,0.5)',
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      zIndex: 1000,
-    }}>
-      <div style={{
-        background: '#fff',
-        borderRadius: '8px',
-        padding: '20px',
-        maxWidth: '500px',
-        maxHeight: '80vh',
-        overflow: 'auto',
-        boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
-      }}>
+    <div className="settings-overlay">
+      <div className="settings-panel">
         <h2 style={{ marginBottom: '16px' }}>Settings</h2>
 
-        <div style={{ marginBottom: '16px' }}>
-          <label style={{ display: 'block', marginBottom: '4px', fontWeight: 500 }}>API Key</label>
+        <div className="settings-row">
+          <label className="settings-label">API Key</label>
           <input
+            className="settings-input"
             type="password"
             value={apiKey}
             onChange={(e) => setApiKey(e.target.value)}
             style={{
-              width: '100%',
-              padding: '8px',
-              border: '1px solid #ddd',
-              borderRadius: '4px',
               fontFamily: 'monospace',
               fontSize: '12px',
             }}
@@ -267,8 +249,8 @@ export const Settings: React.FC<SettingsProps> = ({ isOpen, onClose, onConfigCha
             style={{
               marginTop: '8px',
               padding: '6px 12px',
-              background: '#4CAF50',
-              color: '#fff',
+              background: 'var(--color-success)',
+              color: 'var(--color-surface)',
               border: 'none',
               borderRadius: '4px',
               cursor: 'pointer',
@@ -278,16 +260,16 @@ export const Settings: React.FC<SettingsProps> = ({ isOpen, onClose, onConfigCha
             {testing ? 'Testing...' : 'Test Connection'}
           </button>
           {testResult && (
-            <p style={{ marginTop: '4px', fontSize: '12px', color: testResult.includes('valid') ? '#4CAF50' : '#f44' }}>
+            <p style={{ marginTop: '4px', fontSize: '12px', color: testResult.includes('valid') ? 'var(--color-success)' : 'var(--color-danger-strong)' }}>
               {testResult}
             </p>
           )}
         </div>
 
-        <div style={{ marginBottom: '16px' }}>
-          <label style={{ display: 'block', marginBottom: '4px', fontWeight: 500 }}>Hotkey</label>
+        <div className="settings-row">
+          <label className="settings-label">Hotkey</label>
           <HotkeyCapture value={hotkey} onChange={setHotkey} />
-          <p style={{ marginTop: '4px', fontSize: '11px', color: '#888' }}>
+          <p style={{ marginTop: '4px', fontSize: '11px', color: 'var(--color-text-tertiary)' }}>
             Click the field, then press the key combination you want (e.g. Ctrl+Shift+Z).
           </p>
         </div>
@@ -296,15 +278,15 @@ export const Settings: React.FC<SettingsProps> = ({ isOpen, onClose, onConfigCha
           <label style={{ display: 'block', marginBottom: '8px', fontWeight: 500 }}>Categories</label>
           <div style={{ marginBottom: '8px' }}>
             {categories.map((cat) => (
-              <div key={cat.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px', background: '#f0f0f0', borderRadius: '3px', marginBottom: '4px', fontSize: '12px' }}>
+              <div key={cat.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px', background: 'var(--color-bg-secondary)', borderRadius: '3px', marginBottom: '4px', fontSize: '12px' }}>
                 <span>{cat.name}</span>
                 {cat.id !== 1 && (
                   <button
                     onClick={() => handleDeleteCategory(cat.id)}
                     style={{
                       padding: '2px 6px',
-                      background: '#ff4444',
-                      color: '#fff',
+                      background: 'var(--color-danger-strong)',
+                      color: 'var(--color-surface)',
                       border: 'none',
                       borderRadius: '3px',
                       cursor: 'pointer',
@@ -326,7 +308,7 @@ export const Settings: React.FC<SettingsProps> = ({ isOpen, onClose, onConfigCha
               style={{
                 flex: 1,
                 padding: '6px',
-                border: '1px solid #ddd',
+                border: '1px solid var(--color-border-strong)',
                 borderRadius: '4px',
                 fontSize: '12px',
               }}
@@ -335,8 +317,8 @@ export const Settings: React.FC<SettingsProps> = ({ isOpen, onClose, onConfigCha
               onClick={handleAddCategory}
               style={{
                 padding: '6px 12px',
-                background: '#2196F3',
-                color: '#fff',
+                background: 'var(--color-accent)',
+                color: 'var(--color-surface)',
                 border: 'none',
                 borderRadius: '4px',
                 cursor: 'pointer',
@@ -353,22 +335,20 @@ export const Settings: React.FC<SettingsProps> = ({ isOpen, onClose, onConfigCha
         <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
           <button
             onClick={onClose}
+            className="btn-secondary"
             style={{
               padding: '8px 16px',
-              background: '#ccc',
-              border: 'none',
-              borderRadius: '4px',
-              cursor: 'pointer',
             }}
           >
             Cancel
           </button>
           <button
             onClick={handleSave}
+            className="btn-primary"
             style={{
               padding: '8px 16px',
-              background: '#2196F3',
-              color: '#fff',
+              background: 'var(--color-accent)',
+              color: 'var(--color-surface)',
               border: 'none',
               borderRadius: '4px',
               cursor: 'pointer',
