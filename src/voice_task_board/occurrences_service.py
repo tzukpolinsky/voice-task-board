@@ -75,21 +75,20 @@ def complete_occurrence(occ_id: int) -> None:
 
 def end_series(task_id: int) -> None:
     """End a recurring series.
-    
-    This marks the series as inactive, deletes all future occurrences,
-    deletes them on Google if mirrored, and marks the parent task as done.
+
+    Marks the series inactive, deletes every UNFINISHED occurrence (future and
+    any past-but-undone ones — "end" means no remaining schedule), deletes them
+    on Google if mirrored, keeps the done history, and marks the parent done.
     """
     db = get_db()
     task = db.get_task(task_id)
     if not task:
         return
-    
-    # Get the current datetime for finding future occurrences
-    import datetime
-    now_utc = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
-    
-    # Delete future occurrences and get their external IDs
-    external_ids_to_delete = db.delete_future_occurrences(task_id, now_utc)
+
+    # Delete all not-done occurrences (keeps done history) and get their external IDs.
+    # Using "unfinished" rather than "strictly future" so past-but-undone occurrences
+    # don't linger after the user explicitly ended the series.
+    external_ids_to_delete = db.delete_unfinished_occurrences(task_id)
     
     # Delete them on Google
     if external_ids_to_delete and task.mirror_to_remote:
