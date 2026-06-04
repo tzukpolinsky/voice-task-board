@@ -298,3 +298,47 @@ def show_confirmation_toast(
     if not triggered:
         return "timeout"
     return result["action"]
+
+
+def show_missed_summary(task_title: str, count: int) -> str:
+    """Show a summary toast for >=2 missed occurrences of one task.
+
+    Returns one of 'dismiss', 'mark_done', or empty string if unavailable.
+    Blocks until click or timeout.
+    """
+    from windows_toasts import Toast, ToastButton, ToastDuration
+
+    toaster = _get_toaster()
+    if toaster is None:
+        return ""
+
+    event = threading.Event()
+    result: dict[str, str] = {"action": ""}
+
+    body = f"{count} reminders missed"
+    toast = Toast(text_fields=["Missed reminders", f"{task_title}: {body}"])
+    toast.duration = ToastDuration.Long
+    toast.AddAction(ToastButton(content="Dismiss", arguments="dismiss"))
+    toast.AddAction(ToastButton(content="Mark All Done", arguments="mark_done"))
+
+    def _on_activated(e: Any) -> None:
+        result["action"] = (getattr(e, "arguments", "") or "")
+        event.set()
+
+    def _on_dismissed(_: Any) -> None:
+        event.set()
+
+    toast.on_activated = _on_activated
+    toast.on_dismissed = _on_dismissed
+
+    _retain_toast(toast)
+    try:
+        toaster.show_toast(toast)
+        logger.info(f"Showed missed-summary toast for task {task_title}: {count} occurrences")
+        event.wait(timeout=10)
+    except Exception as e:
+        logger.warning(f"Could not show missed-summary toast: {e}")
+    finally:
+        _release_toast(toast)
+
+    return result.get("action", "")

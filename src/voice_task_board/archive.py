@@ -36,6 +36,22 @@ CREATE TABLE archived_tasks (
     archived_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
     """,
+    """
+CREATE TABLE archived_occurrences (
+    id INTEGER PRIMARY KEY,
+    task_id INTEGER NOT NULL,
+    due_at_utc TEXT NOT NULL,
+    fired INTEGER NOT NULL DEFAULT 0,
+    is_done INTEGER NOT NULL DEFAULT 0,
+    external_id TEXT,
+    mirror_pending INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    last_notified_date TEXT
+);
+
+CREATE INDEX idx_archived_occ_task ON archived_occurrences(task_id);
+CREATE INDEX idx_archived_occ_due ON archived_occurrences(due_at_utc);
+    """,
 ]
 
 
@@ -108,6 +124,26 @@ def _sweep() -> None:
                     archive_conn.close()
                     return
 
+                ids = [row[0] for row in rows]
+
+                # Copy occurrences to archive before deleting parent tasks (Phase 12)
+                for task_id in ids:
+                    cursor.execute(
+                        """SELECT id, task_id, due_at_utc, fired, is_done, external_id, mirror_pending, created_at, last_notified_date
+                           FROM occurrences WHERE task_id = ?""",
+                        (task_id,),
+                    )
+                    occurrences = cursor.fetchall()
+                    for occ in occurrences:
+                        archive_conn.execute(
+                            """INSERT OR REPLACE INTO archived_occurrences
+                               (id, task_id, due_at_utc, fired, is_done, external_id, mirror_pending, created_at, last_notified_date)
+                               VALUES (?,?,?,?,?,?,?,?,?)""",
+                            tuple(occ),
+                        )
+                archive_conn.commit()
+
+                # Archive the tasks
                 for row in rows:
                     archive_conn.execute(
                         """INSERT OR REPLACE INTO archived_tasks
@@ -120,10 +156,10 @@ def _sweep() -> None:
                     )
                 archive_conn.commit()
 
-                ids = [row[0] for row in rows]
+                # Delete from live (this cascades and deletes occurrences too)
                 cursor.executemany("DELETE FROM tasks WHERE id = ?", [(i,) for i in ids])
                 live_db._conn.commit()
-                logger.info(f"Archived {len(ids)} old done tasks")
+                logger.info(f"Archived {len(ids)} old done tasks and their occurrences")
 
             archive_conn.close()
         except Exception:

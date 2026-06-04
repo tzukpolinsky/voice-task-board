@@ -123,9 +123,18 @@ def apply(first: FirstPassIntent, gemini: GeminiBackend) -> tuple[ApplyResult, i
                 recurrence_rule=first.recurrence_rule,
             )
             schedule_changed = True
-            
-            # If recurrence_rule is set, materialize the occurrences
+
+            # If recurrence_rule is set, delete old occurrences and materialize new ones
             if first.recurrence_rule:
+                from datetime import datetime, timezone
+                now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+                # Delete future occurrences (+ their Google IDs) before regenerating
+                deleted_external_ids = db.delete_future_occurrences(resolved.target_id, now_utc)
+                # If mirrored, delete those external tasks
+                if deleted_external_ids and first.mirror_to_remote:
+                    from voice_task_board import remote_sync
+                    for ext_id in deleted_external_ids:
+                        remote_sync.delete_occurrence_external(ext_id)
                 recurrence_service.materialize(resolved.target_id, gemini_backend=gemini)
 
         if first.mirror_to_remote:

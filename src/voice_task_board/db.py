@@ -50,6 +50,7 @@ class Occurrence:
     external_id: str | None = None
     mirror_pending: int = 0
     created_at: str = ""
+    last_notified_date: str | None = None
 
 
 class MatchResult(Enum):
@@ -129,6 +130,11 @@ CREATE INDEX idx_occ_fired ON occurrences(fired);
 ALTER TABLE tasks ADD COLUMN is_recurrence INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE tasks ADD COLUMN recurrence_until TEXT;
 ALTER TABLE tasks ADD COLUMN recurrence_active INTEGER NOT NULL DEFAULT 1;
+    """,
+    """
+ALTER TABLE occurrences ADD COLUMN last_notified_date TEXT;
+DROP INDEX idx_occ_fired;
+CREATE INDEX idx_occ_done ON occurrences(is_done);
     """,
 ]
 
@@ -342,9 +348,10 @@ class Database:
         with self._lock:
             cursor = self._conn.cursor()
             cursor.execute(
-                """SELECT 
+                """SELECT
                    occurrences.id, occurrences.task_id, occurrences.due_at_utc, occurrences.fired,
                    occurrences.is_done, occurrences.external_id, occurrences.mirror_pending, occurrences.created_at,
+                   occurrences.last_notified_date,
                    tasks.id, tasks.title, tasks.description, tasks.category_id, categories.name,
                    tasks.status, tasks.created_at, tasks.updated_at,
                    tasks.due_at_utc, tasks.due_tz, tasks.is_full_day, tasks.lead_time_minutes,
@@ -365,13 +372,14 @@ class Database:
             )
             result = []
             for row in cursor.fetchall():
-                # First 8 columns are occurrence, next 21 are task
+                # First 9 columns are occurrence (including last_notified_date), next 21 are task
                 occ = Occurrence(
                     id=row[0], task_id=row[1], due_at_utc=row[2], fired=row[3],
-                    is_done=row[4], external_id=row[5], mirror_pending=row[6], created_at=row[7]
+                    is_done=row[4], external_id=row[5], mirror_pending=row[6], created_at=row[7],
+                    last_notified_date=row[8]
                 )
-                # Reconstruct the Task from columns 8 onwards (skip the occurrence columns)
-                task_row = row[8:]
+                # Reconstruct the Task from columns 9 onwards (skip the occurrence columns)
+                task_row = row[9:]
                 task = Task(
                     id=int(task_row[0]),
                     title=task_row[1],
@@ -417,7 +425,8 @@ class Database:
             return [self._row_to_task(row) for row in cursor.fetchall()]
 
     def list_pending_mirror_tasks(self) -> list[Task]:
-        """Return tasks with mirror_pending=1 (failed sync, retry queue)."""
+        """Return tasks with mirror_pending=1 (failed sync, retry queue).
+        Excludes recurring parent tasks (is_recurrence=1) since occurrences are mirrored separately."""
         with self._lock:
             cursor = self._conn.cursor()
             cursor.execute(
@@ -429,7 +438,7 @@ class Database:
                           tasks.reminder_fired, tasks.is_recurrence, tasks.recurrence_until,
                           tasks.recurrence_active
                    FROM tasks JOIN categories ON tasks.category_id = categories.id
-                   WHERE tasks.mirror_pending = 1"""
+                   WHERE tasks.mirror_pending = 1 AND tasks.is_recurrence = 0"""
             )
             return [self._row_to_task(row) for row in cursor.fetchall()]
 
@@ -646,14 +655,14 @@ class Database:
                 )
             self._conn.commit()
 
-    def next_occurrence(self, task_id: int) -> Occurrence | None:
-        """Get the earliest occurrence with fired=0."""
+    def current_occurrence(self, task_id: int) -> Occurrence | None:
+        """Get the earliest occurrence with is_done=0 (the current/active occurrence)."""
         with self._lock:
             cursor = self._conn.cursor()
             cursor.execute(
-                """SELECT id, task_id, due_at_utc, fired, is_done, external_id, mirror_pending, created_at
+                """SELECT id, task_id, due_at_utc, fired, is_done, external_id, mirror_pending, created_at, last_notified_date
                    FROM occurrences
-                   WHERE task_id = ? AND fired = 0
+                   WHERE task_id = ? AND is_done = 0
                    ORDER BY due_at_utc LIMIT 1""",
                 (task_id,),
             )
@@ -661,9 +670,14 @@ class Database:
             if row:
                 return Occurrence(
                     id=row[0], task_id=row[1], due_at_utc=row[2], fired=row[3],
-                    is_done=row[4], external_id=row[5], mirror_pending=row[6], created_at=row[7]
+                    is_done=row[4], external_id=row[5], mirror_pending=row[6], created_at=row[7],
+                    last_notified_date=row[8]
                 )
             return None
+
+    def next_occurrence(self, task_id: int) -> Occurrence | None:
+        """Deprecated: use current_occurrence() instead. Get the earliest occurrence with fired=0."""
+        return self.current_occurrence(task_id)
 
     def last_materialized_due(self, task_id: int) -> str | None:
         """Get the max due_at_utc for a task (the last materialized occurrence)."""
@@ -681,7 +695,7 @@ class Database:
         with self._lock:
             cursor = self._conn.cursor()
             cursor.execute(
-                """SELECT id, task_id, due_at_utc, fired, is_done, external_id, mirror_pending, created_at
+                """SELECT id, task_id, due_at_utc, fired, is_done, external_id, mirror_pending, created_at, last_notified_date
                    FROM occurrences
                    WHERE task_id = ?
                    ORDER BY due_at_utc""",
@@ -691,7 +705,8 @@ class Database:
             for row in cursor.fetchall():
                 result.append(Occurrence(
                     id=row[0], task_id=row[1], due_at_utc=row[2], fired=row[3],
-                    is_done=row[4], external_id=row[5], mirror_pending=row[6], created_at=row[7]
+                    is_done=row[4], external_id=row[5], mirror_pending=row[6], created_at=row[7],
+                    last_notified_date=row[8]
                 ))
             return result
 
@@ -727,7 +742,7 @@ class Database:
         with self._lock:
             cursor = self._conn.cursor()
             cursor.execute(
-                """SELECT id, task_id, due_at_utc, fired, is_done, external_id, mirror_pending, created_at
+                """SELECT id, task_id, due_at_utc, fired, is_done, external_id, mirror_pending, created_at, last_notified_date
                    FROM occurrences
                    WHERE task_id = ? AND external_id IS NULL
                    ORDER BY due_at_utc""",
@@ -737,7 +752,8 @@ class Database:
             for row in cursor.fetchall():
                 result.append(Occurrence(
                     id=row[0], task_id=row[1], due_at_utc=row[2], fired=row[3],
-                    is_done=row[4], external_id=row[5], mirror_pending=row[6], created_at=row[7]
+                    is_done=row[4], external_id=row[5], mirror_pending=row[6], created_at=row[7],
+                    last_notified_date=row[8]
                 ))
             return result
 
@@ -795,6 +811,44 @@ class Database:
                 """UPDATE tasks SET is_recurrence = ?, recurrence_rule = ?, recurrence_until = ?,
                    recurrence_active = 1, updated_at = datetime('now') WHERE id = ?""",
                 (1 if rrule else 0, rrule, until, task_id),
+            )
+            self._conn.commit()
+
+    def set_occurrence_notified(self, occ_id: int, notified_date: str) -> None:
+        """Update last_notified_date for an occurrence (e.g. to today's date)."""
+        with self._lock:
+            self._conn.execute(
+                "UPDATE occurrences SET last_notified_date = ? WHERE id = ?",
+                (notified_date, occ_id),
+            )
+            self._conn.commit()
+
+    def list_pending_occurrences(self, task_id: int) -> list[Occurrence]:
+        """Get occurrences that are not done (is_done=0) for a task."""
+        with self._lock:
+            cursor = self._conn.cursor()
+            cursor.execute(
+                """SELECT id, task_id, due_at_utc, fired, is_done, external_id, mirror_pending, created_at, last_notified_date
+                   FROM occurrences
+                   WHERE task_id = ? AND is_done = 0
+                   ORDER BY due_at_utc""",
+                (task_id,),
+            )
+            result = []
+            for row in cursor.fetchall():
+                result.append(Occurrence(
+                    id=row[0], task_id=row[1], due_at_utc=row[2], fired=row[3],
+                    is_done=row[4], external_id=row[5], mirror_pending=row[6], created_at=row[7],
+                    last_notified_date=row[8]
+                ))
+            return result
+
+    def mark_pile_resolved(self, task_id: int) -> None:
+        """Mark all pending (is_done=0) occurrences as done."""
+        with self._lock:
+            self._conn.execute(
+                "UPDATE occurrences SET is_done = 1 WHERE task_id = ? AND is_done = 0",
+                (task_id,),
             )
             self._conn.commit()
 

@@ -11,6 +11,13 @@ from voice_task_board.notifications import show_status
 logger = logging.getLogger(__name__)
 
 
+def resolve_pile(task_id: int) -> None:
+    """Mark all pending occurrences for a task as done."""
+    db = get_db()
+    db.mark_pile_resolved(task_id)
+    logger.info(f"Marked all pending occurrences done for task {task_id}")
+
+
 def materialize(task_id: int, gemini_backend=None) -> None:
     """
     Materialize a recurring task: generate occurrences and sync to Google if needed.
@@ -69,7 +76,10 @@ def materialize(task_id: int, gemini_backend=None) -> None:
     # Add them to the database
     db.add_occurrences(task_id, occurrences)
     logger.info(f"Materialized {len(occurrences)} occurrences for task {task_id}")
-    
+
+    # Clear the parent's mirror_pending flag (avoid double-mirror after push_occurrences below)
+    db.set_external(task_id, task.external_provider, task.external_id, None, mirror_pending=False)
+
     # Update parent task to point to the first occurrence
     db.update_task_due(
         task_id,
