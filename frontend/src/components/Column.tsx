@@ -5,6 +5,7 @@ import type { Task, ArchivedTask } from '@/types/domain'
 import { api } from '@/api'
 import { useToast } from '@/context/ToastContext'
 import { TaskCard } from './TaskCard'
+import { RecurringDoneCard } from './RecurringDoneCard'
 
 interface ColumnProps {
   categoryId: number
@@ -216,31 +217,40 @@ export const Column: React.FC<ColumnProps> = ({ categoryId, categoryName, tasks,
 
 const DoneCard: React.FC<{ task: Task; onChanged: () => void }> = ({ task }) => {
   return (
-    <div style={{
-      background: 'var(--color-surface)',
-      border: '1px solid var(--color-border)',
-      borderRadius: 'var(--radius-md)',
-      padding: 'var(--space-2) var(--space-3)',
-      marginBottom: 'var(--space-1)',
-      opacity: 0.8,
-    }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', gap: 'var(--space-2)' }}>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <p style={{ fontWeight: 500, fontSize: 'var(--text-base)', textDecoration: 'line-through', color: 'var(--color-text-muted)', marginBottom: 'var(--space-1)', wordBreak: 'break-word' }}>
-            {task.title}
-          </p>
-          <div style={{ display: 'flex', gap: 'var(--space-1)', alignItems: 'center', flexWrap: 'wrap' }}>
-            <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-faint)' }}>
-              {new Date(task.updated_at).toLocaleDateString()}
-            </span>
-            {task.mirror_to_remote && (
-              <span title={`Was mirrored to ${task.external_provider ?? 'remote'}`} style={{ fontSize: 'var(--text-xs)', color: 'var(--color-neutral)', display: 'flex', alignItems: 'center', gap: '3px' }}>
-                <Clipboard size={10} /> {task.external_provider === 'google' ? 'Google' : task.external_provider === 'microsoft' ? 'Microsoft' : 'Remote'}
+    <div>
+      <div style={{
+        background: 'var(--color-surface)',
+        border: '1px solid var(--color-border)',
+        borderRadius: 'var(--radius-md)',
+        padding: 'var(--space-2) var(--space-3)',
+        marginBottom: 'var(--space-1)',
+        opacity: 0.8,
+      }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', gap: 'var(--space-2)' }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <p style={{ fontWeight: 500, fontSize: 'var(--text-base)', textDecoration: 'line-through', color: 'var(--color-text-muted)', marginBottom: 'var(--space-1)', wordBreak: 'break-word' }}>
+              {task.title}
+            </p>
+            <div style={{ display: 'flex', gap: 'var(--space-1)', alignItems: 'center', flexWrap: 'wrap' }}>
+              <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-faint)' }}>
+                {new Date(task.updated_at).toLocaleDateString()}
               </span>
-            )}
+              {task.mirror_to_remote && (
+                <span title={`Was mirrored to ${task.external_provider ?? 'remote'}`} style={{ fontSize: 'var(--text-xs)', color: 'var(--color-neutral)', display: 'flex', alignItems: 'center', gap: '3px' }}>
+                  <Clipboard size={10} /> {task.external_provider === 'google' ? 'Google' : task.external_provider === 'microsoft' ? 'Microsoft' : 'Remote'}
+                </span>
+              )}
+            </div>
           </div>
         </div>
       </div>
+      
+      {/* Show recurring done history if this is a recurring task */}
+      {task.recurrence_rule && (
+        <div style={{ marginBottom: 'var(--space-1)' }}>
+          <RecurringDoneCard task={task} />
+        </div>
+      )}
     </div>
   )
 }
