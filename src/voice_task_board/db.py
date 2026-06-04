@@ -35,6 +35,21 @@ class Task:
     external_updated_at: str | None = None
     mirror_pending: bool = False
     reminder_fired: bool = False
+    is_recurrence: bool = False
+    recurrence_until: str | None = None
+    recurrence_active: bool = True
+
+
+@dataclass
+class Occurrence:
+    id: int
+    task_id: int
+    due_at_utc: str
+    fired: int = 0
+    is_done: int = 0
+    external_id: str | None = None
+    mirror_pending: int = 0
+    created_at: str = ""
 
 
 class MatchResult(Enum):
@@ -94,6 +109,26 @@ ALTER TABLE tasks ADD COLUMN external_id TEXT;
 ALTER TABLE tasks ADD COLUMN external_updated_at TEXT;
 ALTER TABLE tasks ADD COLUMN mirror_pending INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE tasks ADD COLUMN reminder_fired INTEGER NOT NULL DEFAULT 0;
+    """,
+    """
+CREATE TABLE occurrences (
+  id INTEGER PRIMARY KEY,
+  task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  due_at_utc TEXT NOT NULL,
+  fired INTEGER NOT NULL DEFAULT 0,
+  is_done INTEGER NOT NULL DEFAULT 0,
+  external_id TEXT,
+  mirror_pending INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX idx_occ_task ON occurrences(task_id);
+CREATE INDEX idx_occ_due ON occurrences(due_at_utc);
+CREATE INDEX idx_occ_fired ON occurrences(fired);
+
+ALTER TABLE tasks ADD COLUMN is_recurrence INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE tasks ADD COLUMN recurrence_until TEXT;
+ALTER TABLE tasks ADD COLUMN recurrence_active INTEGER NOT NULL DEFAULT 1;
     """,
 ]
 
@@ -270,7 +305,8 @@ class Database:
                           tasks.due_at_utc, tasks.due_tz, tasks.is_full_day, tasks.lead_time_minutes,
                           tasks.recurrence_rule, tasks.mirror_to_remote, tasks.external_provider,
                           tasks.external_id, tasks.external_updated_at, tasks.mirror_pending,
-                          tasks.reminder_fired
+                          tasks.reminder_fired, tasks.is_recurrence, tasks.recurrence_until,
+                          tasks.recurrence_active
                    FROM tasks JOIN categories ON tasks.category_id = categories.id
                    {where}
                    ORDER BY tasks.created_at DESC"""
@@ -287,7 +323,8 @@ class Database:
                           tasks.due_at_utc, tasks.due_tz, tasks.is_full_day, tasks.lead_time_minutes,
                           tasks.recurrence_rule, tasks.mirror_to_remote, tasks.external_provider,
                           tasks.external_id, tasks.external_updated_at, tasks.mirror_pending,
-                          tasks.reminder_fired
+                          tasks.reminder_fired, tasks.is_recurrence, tasks.recurrence_until,
+                          tasks.recurrence_active
                    FROM tasks JOIN categories ON tasks.category_id = categories.id
                    WHERE tasks.status = 'open'
                      AND tasks.due_at_utc IS NOT NULL
@@ -307,7 +344,8 @@ class Database:
                           tasks.due_at_utc, tasks.due_tz, tasks.is_full_day, tasks.lead_time_minutes,
                           tasks.recurrence_rule, tasks.mirror_to_remote, tasks.external_provider,
                           tasks.external_id, tasks.external_updated_at, tasks.mirror_pending,
-                          tasks.reminder_fired
+                          tasks.reminder_fired, tasks.is_recurrence, tasks.recurrence_until,
+                          tasks.recurrence_active
                    FROM tasks JOIN categories ON tasks.category_id = categories.id
                    WHERE tasks.status = 'open' AND tasks.external_id IS NOT NULL"""
             )
@@ -323,7 +361,8 @@ class Database:
                           tasks.due_at_utc, tasks.due_tz, tasks.is_full_day, tasks.lead_time_minutes,
                           tasks.recurrence_rule, tasks.mirror_to_remote, tasks.external_provider,
                           tasks.external_id, tasks.external_updated_at, tasks.mirror_pending,
-                          tasks.reminder_fired
+                          tasks.reminder_fired, tasks.is_recurrence, tasks.recurrence_until,
+                          tasks.recurrence_active
                    FROM tasks JOIN categories ON tasks.category_id = categories.id
                    WHERE tasks.mirror_pending = 1"""
             )
@@ -351,6 +390,9 @@ class Database:
             external_updated_at=row[16],
             mirror_pending=bool(row[17]),
             reminder_fired=bool(row[18]),
+            is_recurrence=bool(row[19]),
+            recurrence_until=row[20],
+            recurrence_active=bool(row[21]),
         )
 
     def list_categories(self) -> list[dict[str, int | str]]:
@@ -426,7 +468,8 @@ class Database:
                           tasks.due_at_utc, tasks.due_tz, tasks.is_full_day, tasks.lead_time_minutes,
                           tasks.recurrence_rule, tasks.mirror_to_remote, tasks.external_provider,
                           tasks.external_id, tasks.external_updated_at, tasks.mirror_pending,
-                          tasks.reminder_fired
+                          tasks.reminder_fired, tasks.is_recurrence, tasks.recurrence_until,
+                          tasks.recurrence_active
                    FROM tasks JOIN categories ON tasks.category_id = categories.id
                    WHERE tasks.id = ?""",
                 (task_id,),
@@ -522,6 +565,171 @@ class Database:
                    updated_at = datetime('now') WHERE id = ?""",
                 (due_at_utc, due_tz, 1 if is_full_day else 0, lead_time_minutes,
                  recurrence_rule or None, task_id),
+            )
+            self._conn.commit()
+
+    # Occurrence-related methods
+    def add_occurrences(self, task_id: int, due_list: list[str]) -> None:
+        """Bulk insert occurrence rows."""
+        with self._lock:
+            cursor = self._conn.cursor()
+            for due_at_utc in due_list:
+                cursor.execute(
+                    """INSERT INTO occurrences (task_id, due_at_utc, fired, is_done, mirror_pending)
+                       VALUES (?, ?, 0, 0, 0)""",
+                    (task_id, due_at_utc),
+                )
+            self._conn.commit()
+
+    def next_occurrence(self, task_id: int) -> Occurrence | None:
+        """Get the earliest occurrence with fired=0."""
+        with self._lock:
+            cursor = self._conn.cursor()
+            cursor.execute(
+                """SELECT id, task_id, due_at_utc, fired, is_done, external_id, mirror_pending, created_at
+                   FROM occurrences
+                   WHERE task_id = ? AND fired = 0
+                   ORDER BY due_at_utc LIMIT 1""",
+                (task_id,),
+            )
+            row = cursor.fetchone()
+            if row:
+                return Occurrence(
+                    id=row[0], task_id=row[1], due_at_utc=row[2], fired=row[3],
+                    is_done=row[4], external_id=row[5], mirror_pending=row[6], created_at=row[7]
+                )
+            return None
+
+    def last_materialized_due(self, task_id: int) -> str | None:
+        """Get the max due_at_utc for a task (the last materialized occurrence)."""
+        with self._lock:
+            cursor = self._conn.cursor()
+            cursor.execute(
+                "SELECT MAX(due_at_utc) FROM occurrences WHERE task_id = ?",
+                (task_id,),
+            )
+            row = cursor.fetchone()
+            return row[0] if row and row[0] else None
+
+    def list_occurrences(self, task_id: int) -> list[Occurrence]:
+        """Get all occurrences for a task, ordered by due."""
+        with self._lock:
+            cursor = self._conn.cursor()
+            cursor.execute(
+                """SELECT id, task_id, due_at_utc, fired, is_done, external_id, mirror_pending, created_at
+                   FROM occurrences
+                   WHERE task_id = ?
+                   ORDER BY due_at_utc""",
+                (task_id,),
+            )
+            result = []
+            for row in cursor.fetchall():
+                result.append(Occurrence(
+                    id=row[0], task_id=row[1], due_at_utc=row[2], fired=row[3],
+                    is_done=row[4], external_id=row[5], mirror_pending=row[6], created_at=row[7]
+                ))
+            return result
+
+    def mark_occurrence_fired(self, occ_id: int) -> None:
+        """Mark an occurrence as fired."""
+        with self._lock:
+            self._conn.execute(
+                "UPDATE occurrences SET fired = 1 WHERE id = ?",
+                (occ_id,),
+            )
+            self._conn.commit()
+
+    def mark_occurrence_done(self, occ_id: int) -> None:
+        """Mark an occurrence as done."""
+        with self._lock:
+            self._conn.execute(
+                "UPDATE occurrences SET is_done = 1 WHERE id = ?",
+                (occ_id,),
+            )
+            self._conn.commit()
+
+    def set_occurrence_external(self, occ_id: int, external_id: str | None, mirror_pending: int) -> None:
+        """Set external_id and mirror_pending for an occurrence."""
+        with self._lock:
+            self._conn.execute(
+                "UPDATE occurrences SET external_id = ?, mirror_pending = ? WHERE id = ?",
+                (external_id, mirror_pending, occ_id),
+            )
+            self._conn.commit()
+
+    def list_unpushed_occurrences(self, task_id: int) -> list[Occurrence]:
+        """Get occurrences with external_id IS NULL."""
+        with self._lock:
+            cursor = self._conn.cursor()
+            cursor.execute(
+                """SELECT id, task_id, due_at_utc, fired, is_done, external_id, mirror_pending, created_at
+                   FROM occurrences
+                   WHERE task_id = ? AND external_id IS NULL
+                   ORDER BY due_at_utc""",
+                (task_id,),
+            )
+            result = []
+            for row in cursor.fetchall():
+                result.append(Occurrence(
+                    id=row[0], task_id=row[1], due_at_utc=row[2], fired=row[3],
+                    is_done=row[4], external_id=row[5], mirror_pending=row[6], created_at=row[7]
+                ))
+            return result
+
+    def delete_future_occurrences(self, task_id: int, after_utc: str) -> list[str]:
+        """Delete occurrences with due_at_utc > after_utc, return list of deleted external_ids."""
+        with self._lock:
+            cursor = self._conn.cursor()
+            cursor.execute(
+                "SELECT external_id FROM occurrences WHERE task_id = ? AND due_at_utc > ? AND external_id IS NOT NULL",
+                (task_id, after_utc),
+            )
+            external_ids = [row[0] for row in cursor.fetchall()]
+            
+            cursor.execute(
+                "DELETE FROM occurrences WHERE task_id = ? AND due_at_utc > ?",
+                (task_id, after_utc),
+            )
+            self._conn.commit()
+            return external_ids
+
+    def end_series(self, task_id: int) -> None:
+        """Mark a recurring task series as ended."""
+        with self._lock:
+            self._conn.execute(
+                "UPDATE tasks SET recurrence_active = 0 WHERE id = ?",
+                (task_id,),
+            )
+            self._conn.commit()
+
+    def count_done_occurrences(self, task_id: int) -> int:
+        """Count how many occurrences are done."""
+        with self._lock:
+            cursor = self._conn.cursor()
+            cursor.execute(
+                "SELECT COUNT(*) FROM occurrences WHERE task_id = ? AND is_done = 1",
+                (task_id,),
+            )
+            return cursor.fetchone()[0]
+
+    def last_done_due(self, task_id: int) -> str | None:
+        """Get the due_at_utc of the most recent done occurrence."""
+        with self._lock:
+            cursor = self._conn.cursor()
+            cursor.execute(
+                "SELECT MAX(due_at_utc) FROM occurrences WHERE task_id = ? AND is_done = 1",
+                (task_id,),
+            )
+            row = cursor.fetchone()
+            return row[0] if row and row[0] else None
+
+    def set_recurrence(self, task_id: int, rrule: str | None, until: str | None) -> None:
+        """Set recurrence info on a task."""
+        with self._lock:
+            self._conn.execute(
+                """UPDATE tasks SET is_recurrence = ?, recurrence_rule = ?, recurrence_until = ?,
+                   recurrence_active = 1, updated_at = datetime('now') WHERE id = ?""",
+                (1 if rrule else 0, rrule, until, task_id),
             )
             self._conn.commit()
 
