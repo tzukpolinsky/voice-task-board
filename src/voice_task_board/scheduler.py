@@ -123,11 +123,14 @@ def _check_due_reminders() -> None:
                 for occ in pending_occs:
                     if _notify_callback:
                         _notify_callback(task)
-                    # For single occurrence, mark as notified immediately
-                    db.set_occurrence_notified(occ.id, now_date)
 
-            # Mark all as fired (so they don't re-appear until re-nag date arrives)
+            # Throttle: stamp last_notified_date=today on EVERY pending occurrence at
+            # display time (both branches). The sweep query re-selects an occurrence only
+            # when last_notified_date < today, so this prevents an *ignored* summary/reminder
+            # from re-firing every minute — it can only re-nag tomorrow (until done/superseded).
+            # `fired` is kept as "has been seen" bookkeeping; the real throttle is the date.
             for occ in pending_occs:
+                db.set_occurrence_notified(occ.id, now_date)
                 db.mark_occurrence_fired(occ.id)
 
             # Lazy top-up: if not past UNTIL, add next occurrence
