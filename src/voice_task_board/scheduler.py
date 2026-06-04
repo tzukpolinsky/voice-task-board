@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import logging
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Callable
 
 from apscheduler.schedulers.background import BackgroundScheduler  # type: ignore
 from apscheduler.triggers.cron import CronTrigger  # type: ignore
 
 from voice_task_board.db import get_db, Task
+from voice_task_board import recurrence
 
 
 logger = logging.getLogger(__name__)
@@ -75,79 +76,80 @@ def _check_due_reminders() -> None:
     try:
         db = get_db()
         now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+        
+        # Handle non-recurring tasks (legacy path - unchanged)
         due_tasks = db.list_tasks_due_for_reminder(now_utc)
         for task in due_tasks:
             db.set_reminder_fired(task.id)
             if _notify_callback:
                 _notify_callback(task)
-            _maybe_spawn_next_recurrence(task)
+        
+        # Handle recurring tasks (new occurrences path)
+        due_occurrences = db.list_occurrences_due_for_reminder(now_utc)
+        
+        for occ, task in due_occurrences:
+            # Mark as fired
+            db.mark_occurrence_fired(occ.id)
+            
+            # Determine if we should fire a toast or be silent
+            # Catch-up rule: if stale (due < now - 2min) AND daily, skip toast
+            now_dt = datetime.fromisoformat(now_utc.replace('Z', '+00:00')).replace(tzinfo=timezone.utc)
+            due_dt = datetime.fromisoformat(occ.due_at_utc.replace('Z', '+00:00')).replace(tzinfo=timezone.utc) if 'Z' not in occ.due_at_utc else datetime.fromisoformat(occ.due_at_utc)
+            try:
+                due_dt = datetime.fromisoformat(occ.due_at_utc)
+            except:
+                due_dt = now_dt
+            
+            stale_threshold = now_dt - timedelta(minutes=2)
+            is_stale = due_dt < stale_threshold
+            is_daily = recurrence.is_daily(task.recurrence_rule or "")
+            should_silent = is_stale and is_daily
+            
+            if not should_silent and _notify_callback:
+                _notify_callback(task)
+            
+            # Lazy top-up: if not past UNTIL, add next occurrence
+            if task.recurrence_active:
+                last_mat_due = db.last_materialized_due(task.id)
+                if last_mat_due is None:
+                    last_mat_due = occ.due_at_utc
+                
+                # Get the next occurrence after the last materialized one
+                next_due = recurrence.next_after(
+                    task.recurrence_rule or "",
+                    last_mat_due,
+                    task.due_tz,
+                    task.recurrence_until,
+                )
+                
+                if next_due:
+                    db.add_occurrences(task.id, [next_due])
+                    
+                    # If mirrored, push the new occurrence to Google
+                    if task.mirror_to_remote:
+                        from voice_task_board import remote_sync
+                        # Get the newly added occurrence
+                        new_occs = db.list_occurrences(task.id)
+                        if new_occs:
+                            new_occ = new_occs[-1]  # Last one added
+                            remote_sync.push_occurrence(new_occ.id)
+                
+                # Update parent task's due_at_utc to the next earliest unfired occurrence
+                next_occ = db.next_occurrence(task.id)
+                if next_occ:
+                    db.update_task_due(
+                        task.id,
+                        due_at_utc=next_occ.due_at_utc,
+                        due_tz=task.due_tz,
+                        is_full_day=task.is_full_day,
+                        lead_time_minutes=task.lead_time_minutes,
+                        recurrence_rule=task.recurrence_rule,
+                    )
+                    # Also update external_id pointer to the next occurrence
+                    if next_occ.external_id:
+                        db.set_external(
+                            task.id, task.external_provider, next_occ.external_id,
+                            None, mirror_pending=False
+                        )
     except Exception:
         logger.exception("Error in reminder sweep")
-
-
-def _maybe_spawn_next_recurrence(task: Task) -> None:
-    """If the task is recurring, create the next instance."""
-    if not task.recurrence_rule:
-        return
-    try:
-        next_due = _next_due_from_rule(task.recurrence_rule, task.due_tz)
-        if next_due is None:
-            return
-        db = get_db()
-        db.add_task(
-            title=task.title,
-            category_name=task.category_name,
-            description=task.description,
-            due_at_utc=next_due,
-            due_tz=task.due_tz,
-            is_full_day=task.is_full_day,
-            lead_time_minutes=task.lead_time_minutes,
-            recurrence_rule=task.recurrence_rule,
-            mirror_to_remote=task.mirror_to_remote,
-        )
-        logger.info(f"Spawned next recurrence for task {task.id}: due={next_due}")
-    except Exception:
-        logger.exception(f"Failed to spawn next recurrence for task {task.id}")
-
-
-def _next_due_from_rule(rule: str, tz_str: str | None) -> str | None:
-    """Parse a recurrence rule string and return the next ISO due datetime."""
-    import re
-    from datetime import timedelta
-
-    try:
-        from zoneinfo import ZoneInfo
-        tz = ZoneInfo(tz_str) if tz_str else timezone.utc
-    except Exception:
-        tz = timezone.utc
-
-    now = datetime.now(tz)
-    rule_lower = rule.lower().strip()
-
-    # Extract time component: "at HH:MM"
-    time_match = re.search(r"at (\d{1,2}):(\d{2})", rule_lower)
-    hour = int(time_match.group(1)) if time_match else now.hour
-    minute = int(time_match.group(2)) if time_match else now.minute
-
-    if "every day" in rule_lower or "daily" in rule_lower:
-        next_dt = now.replace(hour=hour, minute=minute, second=0, microsecond=0) + timedelta(days=1)
-    elif "weekday" in rule_lower or "workday" in rule_lower:
-        next_dt = now.replace(hour=hour, minute=minute, second=0, microsecond=0) + timedelta(days=1)
-        while next_dt.weekday() >= 5:  # skip Sat/Sun
-            next_dt += timedelta(days=1)
-    elif "week" in rule_lower:
-        days_map = {"monday": 0, "tuesday": 1, "wednesday": 2, "thursday": 3,
-                    "friday": 4, "saturday": 5, "sunday": 6}
-        target_day: int | None = None
-        for name, num in days_map.items():
-            if name in rule_lower:
-                target_day = num
-                break
-        if target_day is None:
-            return None
-        days_ahead = (target_day - now.weekday() + 7) % 7 or 7
-        next_dt = now.replace(hour=hour, minute=minute, second=0, microsecond=0) + timedelta(days=days_ahead)
-    else:
-        return None
-
-    return next_dt.strftime("%Y-%m-%dT%H:%M:%S")

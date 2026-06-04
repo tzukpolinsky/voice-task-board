@@ -314,7 +314,8 @@ class Database:
             return [self._row_to_task(row) for row in cursor.fetchall()]
 
     def list_tasks_due_for_reminder(self, now_utc: str) -> list[Task]:
-        """Return open tasks whose reminder should fire: due_at_utc - lead_time_minutes <= now and not yet fired."""
+        """Return open tasks whose reminder should fire: due_at_utc - lead_time_minutes <= now and not yet fired.
+        Only returns NON-RECURRING tasks."""
         with self._lock:
             cursor = self._conn.cursor()
             cursor.execute(
@@ -329,10 +330,74 @@ class Database:
                    WHERE tasks.status = 'open'
                      AND tasks.due_at_utc IS NOT NULL
                      AND tasks.reminder_fired = 0
+                     AND tasks.is_recurrence = 0
                      AND datetime(tasks.due_at_utc, '-' || tasks.lead_time_minutes || ' minutes') <= datetime(?)""",
                 (now_utc,),
             )
             return [self._row_to_task(row) for row in cursor.fetchall()]
+
+    def list_occurrences_due_for_reminder(self, now_utc: str) -> list[tuple]:
+        """Return (occurrence, task) pairs for RECURRING tasks that are due for reminder.
+        Occurrences with fired=0 and their parent task with recurrence_active=1 and status='open'."""
+        with self._lock:
+            cursor = self._conn.cursor()
+            cursor.execute(
+                """SELECT 
+                   occurrences.id, occurrences.task_id, occurrences.due_at_utc, occurrences.fired,
+                   occurrences.is_done, occurrences.external_id, occurrences.mirror_pending, occurrences.created_at,
+                   tasks.id, tasks.title, tasks.description, tasks.category_id, categories.name,
+                   tasks.status, tasks.created_at, tasks.updated_at,
+                   tasks.due_at_utc, tasks.due_tz, tasks.is_full_day, tasks.lead_time_minutes,
+                   tasks.recurrence_rule, tasks.mirror_to_remote, tasks.external_provider,
+                   tasks.external_id, tasks.external_updated_at, tasks.mirror_pending,
+                   tasks.reminder_fired, tasks.is_recurrence, tasks.recurrence_until,
+                   tasks.recurrence_active
+                   FROM occurrences
+                   JOIN tasks ON occurrences.task_id = tasks.id
+                   JOIN categories ON tasks.category_id = categories.id
+                   WHERE tasks.status = 'open'
+                     AND tasks.recurrence_active = 1
+                     AND occurrences.fired = 0
+                     AND datetime(occurrences.due_at_utc, '-' || tasks.lead_time_minutes || ' minutes') <= datetime(?)
+                   ORDER BY occurrences.due_at_utc, occurrences.id
+                """,
+                (now_utc,),
+            )
+            result = []
+            for row in cursor.fetchall():
+                # First 8 columns are occurrence, next 21 are task
+                occ = Occurrence(
+                    id=row[0], task_id=row[1], due_at_utc=row[2], fired=row[3],
+                    is_done=row[4], external_id=row[5], mirror_pending=row[6], created_at=row[7]
+                )
+                # Reconstruct the Task from columns 8 onwards (skip the occurrence columns)
+                task_row = row[8:]
+                task = Task(
+                    id=int(task_row[0]),
+                    title=task_row[1],
+                    description=task_row[2] or "",
+                    category_id=int(task_row[3]),
+                    category_name=task_row[4],
+                    status=task_row[5],
+                    created_at=task_row[6],
+                    updated_at=task_row[7],
+                    due_at_utc=task_row[8],
+                    due_tz=task_row[9],
+                    is_full_day=bool(task_row[10]),
+                    lead_time_minutes=int(task_row[11]) if task_row[11] is not None else 30,
+                    recurrence_rule=task_row[12],
+                    mirror_to_remote=bool(task_row[13]),
+                    external_provider=task_row[14],
+                    external_id=task_row[15],
+                    external_updated_at=task_row[16],
+                    mirror_pending=bool(task_row[17]),
+                    reminder_fired=bool(task_row[18]),
+                    is_recurrence=bool(task_row[19]),
+                    recurrence_until=task_row[20],
+                    recurrence_active=bool(task_row[21]),
+                )
+                result.append((occ, task))
+            return result
 
     def list_mirrored_open_tasks(self) -> list[Task]:
         """Return open tasks that have an external_id (for drift detection)."""
