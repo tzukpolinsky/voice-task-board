@@ -1,0 +1,37 @@
+Convert a natural-language repeat/recurrence phrase to an iCal RRULE string and optional until date.
+
+Current date/time (UTC): {current_utc}
+
+Supported RRULE formats (the app only understands these):
+- "FREQ=DAILY" (every day)
+- "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR" (every weekday)
+- "FREQ=WEEKLY;BYDAY=MO" (every Monday; replace MO with other day codes as needed)
+- "FREQ=DAILY;INTERVAL=16" (every N days; N >= 2)
+- "FREQ=WEEKLY;INTERVAL=2;BYDAY=SU" (every N weeks on a day)
+- "FREQ=MONTHLY" (every month)
+- "FREQ=MONTHLY;BYDAY=1FR" (Nth weekday of month, e.g. 1FR = first Friday, 2MO = second Monday)
+- "FREQ=YEARLY" (every year)
+- Empty/"NONE" for no recurrence
+
+Examples:
+- "every day" → RRULE: "FREQ=DAILY", until: null
+- "every weekday" → RRULE: "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR", until: null
+- "every monday at 09:00" → RRULE: "FREQ=WEEKLY;BYDAY=MO", until: null
+- "every day for the next month" → RRULE: "FREQ=DAILY", until: (today + 30 days, ISO format)
+- "every friday until end of year" → RRULE: "FREQ=WEEKLY;BYDAY=FR", until: "2026-12-31"
+- "once a week" → RRULE: "FREQ=WEEKLY", until: null
+- "does not repeat" → RRULE: null, until: null
+
+Input: the user's repeat phrase (e.g. "every monday at 09:00")
+
+Output: JSON object with two fields:
+{
+  "rrule": "FREQ=...",  // RRULE string, or null if no recurrence
+  "until": "YYYY-MM-DD" // ISO date string, or null if no end date / open-ended
+}
+
+Important:
+- If the phrase contains "for the next X days/weeks/months" or "until <date>", extract an until date (add/compute relative to current date).
+- Time-of-day (09:00, 14:30, etc.) is NOT encoded in the RRULE; it comes from the task's time component separately.
+- If you cannot map the phrase to the supported formats, return {"rrule": null, "until": null}.
+- Always output valid JSON; never wrap in markdown code fences or extra text.

@@ -168,6 +168,45 @@ class GeminiBackend:
             logger.error(f"Failed to parse layer-2 response: {e}; raw={text!r}")
             raise
 
+    def text_to_rrule(self, text: str) -> tuple[str | None, str | None]:
+        """Convert natural-language repeat text to RRULE string and optional until date.
+        
+        Returns a tuple (rrule_or_None, until_or_None) or (None, None) if not parseable.
+        """
+        current_utc = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S UTC")
+        system_prompt = load_prompt("recurrence_to_rrule").format(current_utc=current_utc)
+        
+        request_body = {
+            "contents": [{
+                "parts": [{"text": f"{system_prompt}\n\nInput: {text}"}]
+            }],
+            "generationConfig": {
+                "responseMimeType": "application/json",
+                "responseSchema": {
+                    "type": "object",
+                    "properties": {
+                        "rrule": {"type": "string", "nullable": True},
+                        "until": {"type": "string", "nullable": True},
+                    },
+                    "required": ["rrule", "until"],
+                },
+            },
+        }
+        
+        text_response = self._post_and_extract_text(request_body)
+        try:
+            data = json.loads(text_response)
+            rrule = data.get("rrule")
+            until = data.get("until")
+            # Map "NONE" or empty to None
+            if rrule == "NONE" or rrule == "":
+                rrule = None
+            logger.info(f"text_to_rrule: input={text!r} → rrule={rrule!r} until={until!r}")
+            return (rrule, until)
+        except (ValueError, json.JSONDecodeError) as e:
+            logger.error(f"Failed to parse recurrence text response: {e}; raw={text_response!r}")
+            return (None, None)
+
     def _post_and_extract_text(self, request_body: dict) -> str:
         try:
             response = httpx.post(
