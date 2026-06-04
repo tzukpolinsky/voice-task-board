@@ -7,6 +7,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from voice_task_board.intent import FirstPassIntent
 from voice_task_board.db import get_db
 from voice_task_board.gemini import GeminiBackend
+from voice_task_board import recurrence_service
 
 
 logger = logging.getLogger(__name__)
@@ -68,6 +69,11 @@ def apply(first: FirstPassIntent, gemini: GeminiBackend) -> tuple[ApplyResult, i
             mirror_to_remote=first.mirror_to_remote,
         )
         logger.info(f"Added task {task_id}: {first.title!r} ({first.category}) due={due_at_utc} mirror={first.mirror_to_remote}")
+        
+        # If recurring, materialize the occurrences
+        if first.recurrence_rule:
+            recurrence_service.materialize(task_id, gemini_backend=gemini)
+        
         return ApplyResult.CREATED, task_id
 
     tasks = db.list_tasks()
@@ -117,6 +123,10 @@ def apply(first: FirstPassIntent, gemini: GeminiBackend) -> tuple[ApplyResult, i
                 recurrence_rule=first.recurrence_rule,
             )
             schedule_changed = True
+            
+            # If recurrence_rule is set, materialize the occurrences
+            if first.recurrence_rule:
+                recurrence_service.materialize(resolved.target_id, gemini_backend=gemini)
 
         if first.mirror_to_remote:
             db.set_mirror_toggle(resolved.target_id, True)
