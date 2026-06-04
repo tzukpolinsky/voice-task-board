@@ -353,6 +353,16 @@ def _google_delete_occurrence(external_id: str) -> None:
             raise
 
 
+def _google_complete_occurrence(external_id: str) -> None:
+    """Complete a Google Task for an occurrence by its external_id."""
+    body = {"status": "completed"}
+    _make_api_call_with_backoff(
+        "PATCH",
+        f"{GOOGLE_BASE}/lists/{GOOGLE_TASKLIST}/tasks/{external_id}",
+        headers=_headers(), json=body, timeout=15,
+    )
+
+
 def push_occurrence(occ_id: int) -> None:
     """Push a single occurrence to Google Tasks. Background thread, called from materialize."""
     threading.Thread(target=_do_push_occurrence, args=(occ_id,), daemon=True).start()
