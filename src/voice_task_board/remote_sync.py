@@ -4,6 +4,7 @@ import logging
 import threading
 from datetime import datetime, timezone
 from typing import Any
+import time
 
 import httpx
 
@@ -15,6 +16,9 @@ from voice_task_board.oauth import refresh_google_token, OAuthError
 logger = logging.getLogger(__name__)
 
 _sync_lock = threading.Lock()
+_throttle_lock = threading.Lock()
+_last_call_time = 0.0  # Module-level throttle for Google API calls
+_throttle_min_interval = 0.5  # Minimum 0.5s between calls (2/sec)
 
 # How many tasks are in the pending-mirror retry queue (exposed for UI)
 _pending_count: int = 0
@@ -40,6 +44,57 @@ def _access_token() -> str:
 
 def _headers() -> dict[str, str]:
     return {"Authorization": f"Bearer {_access_token()}", "Content-Type": "application/json"}
+
+
+def _throttle_before_api_call() -> None:
+    """Ensure at least 0.5s between any two Google API calls, with exponential backoff on 429."""
+    global _last_call_time
+    with _throttle_lock:
+        now = time.time()
+        elapsed = now - _last_call_time
+        if elapsed < _throttle_min_interval:
+            sleep_time = _throttle_min_interval - elapsed
+            time.sleep(sleep_time)
+        _last_call_time = time.time()
+
+
+def _make_api_call_with_backoff(method: str, url: str, **kwargs: Any) -> httpx.Response:
+    """Make an HTTP call with exponential backoff on 429 errors."""
+    backoff_times = [0.5, 1.0, 2.0, 4.0]
+    
+    for attempt, backoff in enumerate(backoff_times):
+        _throttle_before_api_call()
+        
+        try:
+            if method == "GET":
+                resp = httpx.get(url, **kwargs)
+            elif method == "POST":
+                resp = httpx.post(url, **kwargs)
+            elif method == "PATCH":
+                resp = httpx.patch(url, **kwargs)
+            elif method == "DELETE":
+                resp = httpx.delete(url, **kwargs)
+            else:
+                raise ValueError(f"Unknown method {method}")
+            
+            if resp.status_code == 429:
+                if attempt < len(backoff_times) - 1:
+                    logger.warning(f"Rate limited (429), backing off {backoff}s")
+                    time.sleep(backoff)
+                    continue
+            
+            resp.raise_for_status()
+            return resp
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 429 and attempt < len(backoff_times) - 1:
+                logger.warning(f"Rate limited (429), backing off {backoff}s")
+                time.sleep(backoff)
+                continue
+            raise
+    
+    # If we get here, we've exhausted retries
+    resp.raise_for_status()
+    return resp
 
 
 # ── Google Tasks ─────────────────────────────────────────────────────────────
@@ -260,6 +315,128 @@ def _do_retry_pending() -> None:
             except Exception as e:
                 logger.warning(f"Retry failed for task {task.id}: {e}")
         _pending_count = db.list_pending_mirror_tasks().__len__()
+
+
+# ── Occurrence-level mirroring ─────────────────────────────────────────────
+
+def _google_create_occurrence(task: Task, occurrence_due: str) -> str:
+    """Create a Google Task for an occurrence."""
+    body: dict[str, Any] = {"title": task.title, "notes": task.description or ""}
+    # Use the occurrence's due date
+    if occurrence_due:
+        if task.is_full_day:
+            body["due"] = f"{occurrence_due[:10]}T00:00:00.000Z"
+        else:
+            body["due"] = _to_rfc3339(occurrence_due)
+    resp = _make_api_call_with_backoff(
+        "POST",
+        f"{GOOGLE_BASE}/lists/{GOOGLE_TASKLIST}/tasks",
+        headers=_headers(), json=body, timeout=15,
+    )
+    data: dict[str, Any] = resp.json()
+    return data["id"]
+
+
+def _google_delete_occurrence(external_id: str) -> None:
+    """Delete a Google Task for an occurrence by its external_id."""
+    try:
+        _make_api_call_with_backoff(
+            "DELETE",
+            f"{GOOGLE_BASE}/lists/{GOOGLE_TASKLIST}/tasks/{external_id}",
+            headers=_headers(), timeout=15,
+        )
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 404:
+            # Already deleted on Google, that's fine
+            logger.debug(f"Google occurrence {external_id} already deleted (404)")
+        else:
+            raise
+
+
+def push_occurrence(occ_id: int) -> None:
+    """Push a single occurrence to Google Tasks. Background thread, called from materialize."""
+    threading.Thread(target=_do_push_occurrence, args=(occ_id,), daemon=True).start()
+
+
+def _do_push_occurrence(occ_id: int) -> None:
+    """Internal: actually push the occurrence to Google."""
+    with _sync_lock:
+        db = get_db()
+        # Load the occurrence directly - we need a method to get it by ID
+        # For now, load all and find it
+        cursor = db._conn.cursor()
+        cursor.execute(
+            """SELECT id, task_id, due_at_utc, fired, is_done, external_id, mirror_pending, created_at
+               FROM occurrences WHERE id = ?""",
+            (occ_id,),
+        )
+        row = cursor.fetchone()
+        if not row:
+            return
+        
+        from voice_task_board.db import Occurrence
+        occ = Occurrence(
+            id=row[0], task_id=row[1], due_at_utc=row[2], fired=row[3],
+            is_done=row[4], external_id=row[5], mirror_pending=row[6], created_at=row[7]
+        )
+        
+        task = db.get_task(occ.task_id)
+        if not task or not task.mirror_to_remote:
+            return
+        
+        try:
+            ext_id = _google_create_occurrence(task, occ.due_at_utc)
+            db.set_occurrence_external(occ.id, ext_id, mirror_pending=0)
+            logger.info(f"Pushed occurrence {occ.id} → google id={ext_id}")
+        except Exception as e:
+            logger.warning(f"Failed to push occurrence {occ.id}: {e}")
+            db.set_occurrence_external(occ.id, None, mirror_pending=1)
+
+
+def delete_occurrence_external(external_id: str) -> None:
+    """Delete a Google Task for an occurrence. Throttled delete."""
+    threading.Thread(target=_do_delete_occurrence_external, args=(external_id,), daemon=True).start()
+
+
+def _do_delete_occurrence_external(external_id: str) -> None:
+    """Internal: delete the Google occurrence."""
+    try:
+        _google_delete_occurrence(external_id)
+        logger.info(f"Deleted google occurrence {external_id}")
+    except Exception as e:
+        logger.warning(f"Failed to delete google occurrence {external_id}: {e}")
+
+
+def push_occurrences_for_task(task_id: int, done_callback: callable | None = None) -> None:
+    """Push all unpushed occurrences for a task. Background thread."""
+    threading.Thread(target=_do_push_occurrences_for_task, args=(task_id, done_callback), daemon=True).start()
+
+
+def _do_push_occurrences_for_task(task_id: int, done_callback: callable | None = None) -> None:
+    """Internal: push all unpushed occurrences for a task."""
+    with _sync_lock:
+        db = get_db()
+        task = db.get_task(task_id)
+        if not task or not task.mirror_to_remote:
+            if done_callback:
+                done_callback()
+            return
+        
+        unpushed = db.list_unpushed_occurrences(task_id)
+        count = 0
+        
+        for occ in unpushed:
+            try:
+                ext_id = _google_create_occurrence(task, occ.due_at_utc)
+                db.set_occurrence_external(occ.id, ext_id, mirror_pending=0)
+                count += 1
+                logger.info(f"Pushed occurrence {occ.id} → google id={ext_id}")
+            except Exception as e:
+                logger.warning(f"Failed to push occurrence {occ.id}: {e}")
+                db.set_occurrence_external(occ.id, None, mirror_pending=1)
+    
+    if done_callback:
+        done_callback()
 
 
 def _to_rfc3339(dt_str: str) -> str:
