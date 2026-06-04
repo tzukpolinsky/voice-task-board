@@ -344,9 +344,11 @@ class Database:
 
     def list_occurrences_due_for_reminder(self, now_utc: str) -> list[tuple]:
         """Return (occurrence, task) pairs for RECURRING tasks that are due for reminder.
-        Occurrences with fired=0 and their parent task with recurrence_active=1 and status='open'."""
+        Selects is_done=0 (not completed) and either never-fired or re-nag (last_notified_date < today)."""
         with self._lock:
             cursor = self._conn.cursor()
+            # Extract just the date part from now_utc for last_notified_date comparison
+            now_date = now_utc[:10] if 'T' in now_utc else now_utc
             cursor.execute(
                 """SELECT
                    occurrences.id, occurrences.task_id, occurrences.due_at_utc, occurrences.fired,
@@ -364,11 +366,12 @@ class Database:
                    JOIN categories ON tasks.category_id = categories.id
                    WHERE tasks.status = 'open'
                      AND tasks.recurrence_active = 1
-                     AND occurrences.fired = 0
+                     AND occurrences.is_done = 0
+                     AND (occurrences.last_notified_date IS NULL OR occurrences.last_notified_date < ?)
                      AND datetime(occurrences.due_at_utc, '-' || tasks.lead_time_minutes || ' minutes') <= datetime(?)
                    ORDER BY occurrences.due_at_utc, occurrences.id
                 """,
-                (now_utc,),
+                (now_date, now_utc),
             )
             result = []
             for row in cursor.fetchall():
@@ -843,13 +846,30 @@ class Database:
                 ))
             return result
 
-    def mark_pile_resolved(self, task_id: int) -> None:
-        """Mark all pending (is_done=0) occurrences as done."""
+    def mark_pile_resolved(self, task_id: int, done: bool = True, notified_date: str = "") -> None:
+        """Mark all pending (is_done=0) occurrences as resolved.
+
+        Args:
+            task_id: The task whose pile to resolve
+            done: If True, set is_done=1; if False (Dismiss), leave is_done=0
+            notified_date: Date to stamp last_notified_date (e.g., today); if empty uses today
+        """
+        if not notified_date:
+            from datetime import datetime, timezone
+            notified_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
         with self._lock:
-            self._conn.execute(
-                "UPDATE occurrences SET is_done = 1 WHERE task_id = ? AND is_done = 0",
-                (task_id,),
-            )
+            if done:
+                self._conn.execute(
+                    "UPDATE occurrences SET is_done = 1, fired = 1, last_notified_date = ? WHERE task_id = ? AND is_done = 0",
+                    (notified_date, task_id),
+                )
+            else:
+                # Dismiss: mark fired and notified, but leave is_done=0 (undone)
+                self._conn.execute(
+                    "UPDATE occurrences SET fired = 1, last_notified_date = ? WHERE task_id = ? AND is_done = 0",
+                    (notified_date, task_id),
+                )
             self._conn.commit()
 
 

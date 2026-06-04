@@ -11,11 +11,18 @@ from voice_task_board.notifications import show_status
 logger = logging.getLogger(__name__)
 
 
-def resolve_pile(task_id: int) -> None:
-    """Mark all pending occurrences for a task as done."""
+def resolve_pile(task_id: int, done: bool = True, notified_date: str = "") -> None:
+    """Mark all pending occurrences for a task as resolved.
+
+    Args:
+        task_id: The task whose pile to resolve
+        done: If True, mark as done; if False (Dismiss), leave undone but throttle re-nag
+        notified_date: Date to stamp for throttling; if empty uses today
+    """
     db = get_db()
-    db.mark_pile_resolved(task_id)
-    logger.info(f"Marked all pending occurrences done for task {task_id}")
+    db.mark_pile_resolved(task_id, done=done, notified_date=notified_date)
+    action = "done" if done else "dismissed"
+    logger.info(f"Marked all pending occurrences {action} for task {task_id}")
 
 
 def materialize(task_id: int, gemini_backend=None) -> None:

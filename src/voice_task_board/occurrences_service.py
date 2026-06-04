@@ -44,24 +44,24 @@ def complete_occurrence(occ_id: int) -> None:
         except Exception as e:
             logger.warning(f"Failed to complete google occurrence {external_id}: {e}")
     
-    # Advance parent task pointer to next unfired occurrence
-    next_occ = db.next_occurrence(task_id)
-    if next_occ:
+    # Advance parent task pointer to next undone (is_done=0) occurrence
+    curr_occ = db.current_occurrence(task_id)
+    if curr_occ:
         db.update_task_due(
             task_id,
-            due_at_utc=next_occ.due_at_utc,
+            due_at_utc=curr_occ.due_at_utc,
             due_tz=task.due_tz,
             is_full_day=task.is_full_day,
             lead_time_minutes=task.lead_time_minutes,
             recurrence_rule=task.recurrence_rule,
         )
-        if next_occ.external_id:
+        if curr_occ.external_id:
             db.set_external(
-                task_id, task.external_provider, next_occ.external_id,
+                task_id, task.external_provider, curr_occ.external_id,
                 None, mirror_pending=False
             )
     else:
-        # No more unfired occurrences - but don't complete the task yet,
+        # No more undone occurrences - but don't complete the task yet,
         # just make sure the pointer is cleared
         db.update_task_due(
             task_id,

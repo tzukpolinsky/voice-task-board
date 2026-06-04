@@ -73,6 +73,17 @@ def _fire_snooze(task_id: int) -> None:
         _notify_callback(task)
 
 
+def _handle_missed_summary_action(task_id: int, action: str) -> None:
+    """Callback from show_missed_summary toast. Non-blocking."""
+    db = get_db()
+    from voice_task_board import recurrence_service
+
+    if action == "mark_done":
+        recurrence_service.resolve_pile(task_id, done=True)
+    elif action == "dismiss":
+        recurrence_service.resolve_pile(task_id, done=False)
+
+
 def _check_due_reminders() -> None:
     try:
         db = get_db()
@@ -101,30 +112,23 @@ def _check_due_reminders() -> None:
         for task_id, pending_occs in pending_by_task.items():
             task = task_objs[task_id]
 
-            # Mark all as fired
-            for occ in pending_occs:
-                db.mark_occurrence_fired(occ.id)
-
-            # Decide: if >=2 pending, show missed-summary; else show normal reminders
+            # Decide: if >=2 pending, show missed-summary (non-blocking); else show normal reminders
             if len(pending_occs) >= 2:
-                # Show a single summary toast and let user choose
+                # Show a single summary toast with callback (non-blocking)
                 from voice_task_board import notifications
-                action = notifications.show_missed_summary(task.title, len(pending_occs))
-
-                if action == "mark_done":
-                    # Mark all pending for this task as done
-                    from voice_task_board import recurrence_service
-                    recurrence_service.resolve_pile(task_id)
-                # else "dismiss": do nothing, re-nag will retry tomorrow
+                callback = lambda action, tid=task_id: _handle_missed_summary_action(tid, action)
+                notifications.show_missed_summary(task.title, len(pending_occs), callback=callback)
             else:
                 # <=1 pending: show normal reminder for each
                 for occ in pending_occs:
                     if _notify_callback:
                         _notify_callback(task)
+                    # For single occurrence, mark as notified immediately
+                    db.set_occurrence_notified(occ.id, now_date)
 
-            # Update last_notified_date for each
+            # Mark all as fired (so they don't re-appear until re-nag date arrives)
             for occ in pending_occs:
-                db.set_occurrence_notified(occ.id, now_date)
+                db.mark_occurrence_fired(occ.id)
 
             # Lazy top-up: if not past UNTIL, add next occurrence
             if task.recurrence_active:
