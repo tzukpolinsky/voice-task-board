@@ -14,10 +14,13 @@ logger = logging.getLogger(__name__)
 _SAMPLE_RATE = 16000
 _MAX_RECORDING_SECONDS = 30
 
-_PREFERRED_HOST_APIS = ("Windows WASAPI", "Windows DirectSound", "MME")
+_PREFERRED_HOST_APIS = ("Windows WASAPI", "Windows DirectSound", "MME", "Windows WDM-KS")
 # MME is kept in the fallback chain as a last resort, but it's too fragile to
 # honor as the "system default" short-circuit: 16 kHz int16 mono streams (and
 # sometimes even native-rate streams) get rejected with paUnanticipatedHostError.
+# WDM-KS is the deepest fallback: on some machines (mic-privacy locked, Intel
+# Smart Sound holding the endpoint) every shared-mode backend fails with -9996 /
+# paUnanticipatedHostError and only the raw WDM-KS device will open.
 _HONOR_SYSTEM_DEFAULT_HOST_APIS = ("Windows WASAPI", "Windows DirectSound")
 
 
@@ -123,34 +126,193 @@ def _device_info(device: int | None) -> dict[str, Any]:
     return sd.query_devices(device, kind="input")
 
 
-def _open_input_stream(callback: Callable[..., None]) -> tuple[sd.InputStream, int, int]:
-    """Open an InputStream at the device's native rate and channel count.
+def _candidate_input_devices() -> list[int]:
+    """Ordered list of input device indices to try, best first.
 
-    Returns (stream, sample_rate, channels). Caller is responsible for
-    downmixing to mono and resampling to 16 kHz after capture.
-
-    Rationale: WASAPI shared mode rejects any format that doesn't match the
-    endpoint's mix format, MME is fragile with odd rates, and WDM-KS does no
-    negotiation at all. Asking each backend for its native rate/channels and
-    float32 dtype is the one combination every Windows host API accepts.
+    Starts with whatever `_pick_input_device` prefers, then every other input
+    device grouped by host-API preference (WASAPI > DirectSound > MME > WDM-KS).
+    De-duplicated, order-preserving. This is what makes recording resilient when
+    the "best" backend is blocked: we fall through to one that actually opens.
     """
-    device = _pick_input_device()
-    info = _device_info(device)
+    ordered: list[int] = []
+
+    def add(idx: int | None) -> None:
+        if isinstance(idx, int) and idx >= 0 and idx not in ordered:
+            ordered.append(idx)
+
+    # 1. The preferred pick (system default / first preferred host API).
+    add(_pick_input_device())
+
+    # 2. Every input device, grouped by host-API preference order.
+    try:
+        hostapis = sd.query_hostapis()
+        devices = sd.query_devices()
+    except Exception:
+        return ordered
+
+    name_by_index = {i: ha["name"] for i, ha in enumerate(hostapis)}
+
+    # Some capture-side devices are NOT real microphones — loopbacks and mixers
+    # ("PC Speaker", "Stereo Mix", "What U Hear") and generic aggregates
+    # ("Sound Mapper", "Primary Sound Capture Driver") still report input
+    # channels and will happily open, but capture silence or the wrong source.
+    # Rank those last so we prefer an actual mic that opens.
+    def is_deprioritized(name: str) -> bool:
+        lowered = name.lower()
+        return any(
+            kw in lowered
+            for kw in ("pc speaker", "stereo mix", "what u hear", "wave out",
+                       "sound mapper", "primary sound capture", "loopback")
+        )
+
+    for preferred in _PREFERRED_HOST_APIS:
+        # Real mics first, then the deprioritized capture devices, per host API.
+        for deprioritized in (False, True):
+            for i, dev in enumerate(devices):
+                if dev.get("max_input_channels", 0) <= 0:
+                    continue
+                if name_by_index.get(dev.get("hostapi", -1)) != preferred:
+                    continue
+                if is_deprioritized(dev.get("name", "")) == deprioritized:
+                    add(i)
+    return ordered
+
+
+def _device_formats(info: dict[str, Any]) -> list[tuple[int, int]]:
+    """Formats to try for a device, best-first: native, native-mono, 16 kHz mono."""
     native_rate = int(info["default_samplerate"])
     native_channels = int(info.get("max_input_channels", 1)) or 1
+    formats: list[tuple[int, int]] = []
+    for fmt in [(native_rate, native_channels), (native_rate, 1), (_SAMPLE_RATE, 1)]:
+        if fmt not in formats:
+            formats.append(fmt)
+    return formats
 
-    stream = sd.InputStream(
-        samplerate=native_rate,
-        channels=native_channels,
-        dtype="float32",
-        device=device,
-        callback=callback,
+
+def _probe_has_signal(device: int | None, rate: int, channels: int,
+                      seconds: float = 0.18) -> bool | None:
+    """Briefly open the device and check whether it delivers non-silent audio.
+
+    Returns True if a signal above the noise floor is seen, False if it opens but
+    is pure digital silence (a dead/phantom endpoint), or None if it won't open.
+    Some Windows capture endpoints ("Microphone (Realtek HD Audio Mic input)")
+    enumerate and OPEN fine but only ever return zeros — probing weeds those out.
+    """
+    frames: list[np.ndarray] = []
+    lock = threading.Lock()
+
+    def cb(indata: np.ndarray, n: int, t: Any, status: Any) -> None:
+        with lock:
+            frames.append(indata.copy())
+
+    try:
+        stream = sd.InputStream(samplerate=rate, channels=channels,
+                                dtype="float32", device=device, callback=cb)
+    except Exception:
+        return None
+    try:
+        with stream:
+            time.sleep(seconds)
+    except Exception:
+        return None
+    with lock:
+        if not frames:
+            return False
+        data = np.concatenate(frames)
+    # Pure-silence phantom endpoints return exactly 0.0; real mics show a tiny
+    # noise floor even in a quiet room. Threshold well below speech level.
+    return bool(data.size and float(np.max(np.abs(data))) > 1e-5)
+
+
+def _open_input_stream(callback: Callable[..., None]) -> tuple[sd.InputStream, int, int]:
+    """Open an InputStream, trying candidate devices/formats until one works.
+
+    Returns (stream, sample_rate, channels). Caller downmixes to mono and
+    resamples to 16 kHz after capture.
+
+    Strategy:
+      1. Try the preferred device first at its native format — the fast common
+         path, no probing.
+      2. If that fails, fall through every other candidate. For fallback devices
+         we PROBE for actual signal, because some endpoints open but return pure
+         silence (e.g. a phantom "Realtek Mic input"); we want a mic that really
+         captures audio, not just one that opens.
+      3. If nothing shows signal but something opened, use the first that opened
+         (a real mic may be momentarily silent) rather than failing.
+    """
+    last_error: Exception | None = None
+    candidates = _candidate_input_devices()
+    if not candidates:
+        candidates = [None]  # let PortAudio pick the default as a last resort
+
+    def _open(device: int | None, rate: int, channels: int) -> sd.InputStream:
+        return sd.InputStream(samplerate=rate, channels=channels,
+                              dtype="float32", device=device, callback=callback)
+
+    def _hostapi_name(info: dict[str, Any]) -> str:
+        try:
+            return sd.query_hostapis()[info["hostapi"]]["name"]
+        except Exception:
+            return "?"
+
+    # --- 1. Fast path: preferred device, native format, no probe. ---
+    preferred = candidates[0]
+    try:
+        info = _device_info(preferred)
+        rate, channels = _device_formats(info)[0]
+        stream = _open(preferred, rate, channels)
+        logger.info(
+            f"Opened InputStream on device={preferred} [{_hostapi_name(info)}] "
+            f"at {rate} Hz, {channels} ch, float32 (preferred)"
+        )
+        return stream, rate, channels
+    except Exception as e:
+        last_error = e
+        logger.info(f"Preferred input device={preferred} failed ({e}); probing fallbacks")
+
+    # --- 2. Fallback: probe each remaining candidate for real signal. ---
+    first_openable: tuple[int | None, int, int, dict] | None = None
+    for device in candidates[1:]:
+        try:
+            info = _device_info(device)
+        except Exception as e:
+            last_error = e
+            continue
+        for rate, channels in _device_formats(info):
+            sig = _probe_has_signal(device, rate, channels)
+            if sig is None:
+                continue  # didn't open at this format
+            if first_openable is None:
+                first_openable = (device, rate, channels, info)
+            if sig:
+                stream = _open(device, rate, channels)
+                logger.info(
+                    f"Opened InputStream on device={device} [{_hostapi_name(info)}] "
+                    f"at {rate} Hz, {channels} ch, float32 (probed: signal present)"
+                )
+                return stream, rate, channels
+            logger.debug(f"device={device} rate={rate} ch={channels} opened but silent; skipping")
+            break  # this device opens but is silent; move to next device
+
+    # --- 3. Nothing showed signal: use the first that merely opened. ---
+    if first_openable is not None:
+        device, rate, channels, info = first_openable
+        stream = _open(device, rate, channels)
+        logger.warning(
+            f"No input device showed a live signal; using device={device} "
+            f"[{_hostapi_name(info)}] at {rate} Hz, {channels} ch. If recordings "
+            "are silent, check Windows mic privacy and that the mic isn't muted."
+        )
+        return stream, rate, channels
+
+    logger.error(
+        f"Could not open any microphone input stream. Tried devices {candidates}. "
+        f"Last error: {last_error!r}. Check Windows Settings -> Privacy & security "
+        "-> Microphone -> 'Let desktop apps access your microphone'."
     )
-    logger.info(
-        f"Opened InputStream at {native_rate} Hz, {native_channels} ch, float32 "
-        f"(will downmix + resample to {_SAMPLE_RATE} Hz mono int16)"
-    )
-    return stream, native_rate, native_channels
+    if last_error is not None:
+        raise last_error
+    raise RuntimeError("No input devices available")
 
 
 def _downmix_to_mono(pcm: np.ndarray) -> np.ndarray:
