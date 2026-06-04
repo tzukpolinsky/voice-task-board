@@ -52,13 +52,15 @@ def materialize(task_id: int, gemini_backend=None) -> None:
             gemini_backend = GeminiBackend(config.gemini_api_key)
         
         try:
-            rrule, until = gemini_backend.text_to_rrule(task.recurrence_rule)
+            rrule, ai_until = gemini_backend.text_to_rrule(task.recurrence_rule)
             if rrule is None:
                 # Not a recurring task after all
                 db.set_recurrence(task_id, None, None)
                 logger.info(f"Task {task_id} marked as non-recurring")
                 return
-            # Store the converted RRULE and until
+            # A user-supplied until (from the edit form) wins over the AI's guess;
+            # only fall back to the AI-extracted until when the user didn't set one.
+            until = task.recurrence_until or ai_until
             db.set_recurrence(task_id, rrule, until)
             task = db.get_task(task_id)  # Reload with new values
         except Exception as e:
@@ -79,7 +81,17 @@ def materialize(task_id: int, gemini_backend=None) -> None:
     if not occurrences:
         logger.warning(f"No occurrences generated for task {task_id}")
         return
-    
+
+    # Idempotency: clear the previously-materialized UNDONE schedule before
+    # regenerating, so (re)materializing a rule doesn't stack a second window on
+    # top of the old one. Done occurrences (history) are kept; this also removes
+    # the boundary occurrence at exactly the start so it isn't duplicated.
+    stale_external_ids = db.delete_unfinished_occurrences(task_id)
+    if stale_external_ids and task.mirror_to_remote:
+        from voice_task_board import remote_sync
+        for ext_id in stale_external_ids:
+            remote_sync.delete_occurrence_external(ext_id)
+
     # Add them to the database
     db.add_occurrences(task_id, occurrences)
     logger.info(f"Materialized {len(occurrences)} occurrences for task {task_id}")

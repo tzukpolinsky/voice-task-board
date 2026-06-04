@@ -60,7 +60,7 @@ export const TaskCard: React.FC<TaskCardProps> = ({ task, onChanged }) => {
     setIsFullDayEdit(task.is_full_day)
     setLeadTimeEdit(task.lead_time_minutes)
     setRecurrenceEdit(task.recurrence_rule ?? null)
-    setUntilEdit(null) // TODO: read from task once stored
+    setUntilEdit(task.recurrence_until ? task.recurrence_until.slice(0, 10) : null)
     setEditing(true)
   }
 
@@ -100,14 +100,21 @@ export const TaskCard: React.FC<TaskCardProps> = ({ task, onChanged }) => {
         dueAtUtc = d.toISOString().slice(0, 19)
         dueTz = Intl.DateTimeFormat().resolvedOptions().timeZone
       }
+      // Save due/lead/full-day. Recurrence is handled by setRecurrence() below
+      // (not here) so the AI text→RRULE conversion, the UNTIL date, and
+      // occurrence (re)materialization all happen in one place.
       await api.updateTaskDue(
         task.id,
         dueAtUtc,
         dueTz,
         isFullDayEdit,
         leadTimeEdit,
-        recurrenceEdit,
+        null,
       )
+
+      // Single source of truth for recurrence: handles text→RRULE, the UNTIL
+      // date, and (re)materialization. Passing null clears any existing rule.
+      await api.setRecurrence(task.id, recurrenceEdit, untilEdit)
 
       setEditing(false)
       onChanged()
@@ -263,12 +270,17 @@ export const TaskCard: React.FC<TaskCardProps> = ({ task, onChanged }) => {
               </p>
             )}
 
-            {/* Recurrence info */}
+            {/* Recurrence caption — always visible on recurring cards.
+                Only mention Google when the task is actually mirrored. */}
             {task.recurrence_rule && (
-              <p style={{ fontSize: '10px', color: 'var(--color-text-faint)', marginBottom: '4px', fontStyle: 'italic' }}>
-                <span style={{ marginRight: '8px' }}>
-                  <Repeat size={11} style={{ display: 'inline', marginRight: '2px', verticalAlign: '-1px' }} /> 
-                  Repeating for up to 1 year
+              <p style={{ fontSize: '10px', color: 'var(--color-text-faint)', marginBottom: '4px', fontStyle: 'italic', display: 'flex', alignItems: 'flex-start', gap: '4px', lineHeight: 1.4 }}>
+                <Repeat size={11} style={{ flexShrink: 0, marginTop: '1px' }} />
+                <span>
+                  {task.recurrence_until
+                    ? `Repeats until ${new Date(task.recurrence_until.slice(0, 10) + 'T00:00:00').toLocaleDateString()}`
+                    : task.mirror_to_remote
+                    ? 'Synced to Google ~1 year ahead. Repeats beyond a year won’t appear on your phone until then.'
+                    : 'Repeats indefinitely (occurrences scheduled ~1 year ahead).'}
                 </span>
               </p>
             )}

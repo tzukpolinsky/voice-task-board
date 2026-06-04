@@ -17,6 +17,8 @@ const createTask = (overrides?: Partial<Task>): Task => ({
   is_full_day: false,
   lead_time_minutes: 30,
   recurrence_rule: null,
+  recurrence_until: null,
+  is_recurrence: false,
   mirror_to_remote: false,
   external_provider: null,
   external_id: null,

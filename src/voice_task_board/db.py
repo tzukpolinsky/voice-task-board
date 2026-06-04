@@ -777,6 +777,23 @@ class Database:
             self._conn.commit()
             return external_ids
 
+    def delete_unfinished_occurrences(self, task_id: int) -> list[str]:
+        """Delete all NOT-done occurrences (is_done=0), keeping done history.
+        Returns deleted external_ids. Used to re-materialize a rule idempotently."""
+        with self._lock:
+            cursor = self._conn.cursor()
+            cursor.execute(
+                "SELECT external_id FROM occurrences WHERE task_id = ? AND is_done = 0 AND external_id IS NOT NULL",
+                (task_id,),
+            )
+            external_ids = [row[0] for row in cursor.fetchall()]
+            cursor.execute(
+                "DELETE FROM occurrences WHERE task_id = ? AND is_done = 0",
+                (task_id,),
+            )
+            self._conn.commit()
+            return external_ids
+
     def end_series(self, task_id: int) -> None:
         """Mark a recurring task series as ended."""
         with self._lock:

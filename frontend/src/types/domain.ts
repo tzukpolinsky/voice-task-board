@@ -17,6 +17,8 @@ export interface Task {
   is_full_day: boolean
   lead_time_minutes: number
   recurrence_rule: string | null
+  recurrence_until: string | null
+  is_recurrence: boolean
   mirror_to_remote: boolean
   external_provider: string | null
   external_id: string | null

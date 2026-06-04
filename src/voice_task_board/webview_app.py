@@ -34,6 +34,8 @@ def _task_to_dict(t: Task) -> dict:
         "is_full_day": t.is_full_day,
         "lead_time_minutes": t.lead_time_minutes,
         "recurrence_rule": t.recurrence_rule,
+        "recurrence_until": t.recurrence_until,
+        "is_recurrence": t.is_recurrence,
         "mirror_to_remote": t.mirror_to_remote,
         "external_provider": t.external_provider,
         "external_id": t.external_id,

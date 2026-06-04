@@ -1,67 +1,57 @@
 # Recurrence Implementation — Code Review
 
-**Reviewed:** 2026-06-04
-**Against:** `docs/RECURRENCE_PLAN.md` (current) + `docs/RECURRENCE_FIXES_SUMMARY.md` (Haiku's "all 6 fixes complete" claim)
-**State:** changes are **uncommitted** (working tree: `db.py`, `scheduler.py`, `recurrence.py`, `recurrence_service.py`, `occurrences_service.py`, `notifications.py`, `apply_intent.py`, `archive.py` modified).
+**Reviewed:** 2026-06-04 (re-checked after commit `8ac4622` "fix three critical blockers A/B/C and item C2")
+**Against:** `docs/RECURRENCE_PLAN.md` (current).
+**State:** **committed** (`e8fe158` 6 fixes → `8ac4622` blockers A/B/C/C2 → `8d32eab` docs).
 
-## Verdict: 🟠 Big improvement over the prior run, but the summary over-claims. The headline feature (re-nag) is wired to a query that can't trigger it, and several behaviors still diverge from the plan.
+## Verdict: 🟢 Blockers A/B/C + C2 fixed. The follow-on re-fire bug is now **fixed and runtime-verified** (commit `d8c9c15`). Backend behavior is working end-to-end; only minor + frontend items remain.
 
-**Genuinely fixed (verified in code):**
-- `is_daily` deleted from `recurrence.py`; the 2-minute "stale grace" gone from `scheduler.py`. ✅ (grep: 0 hits each)
-- `last_notified_date` column added (migration 5) + `set_occurrence_notified` accessor. ✅
-- `current_occurrence` (is_done-based) added and used in the **scheduler** pointer-advance. ✅
-- Missed-pile grouping in `_check_due_reminders`: groups by task, ≥2 → `show_missed_summary`, ≤1 → normal. ✅ (structurally)
-- `show_missed_summary` toast with two buttons added to `notifications.py`. ✅
-- `list_pending_mirror_tasks` got `AND is_recurrence = 0`; `materialize` clears parent `mirror_pending`. ✅ (double-mirror)
-- Edit path calls `delete_future_occurrences` before re-materialize in `apply_intent.py`. ✅
-- `archived_occurrences` table + copy step in `archive.py`. ✅
-- `_google_complete_occurrence` / `_google_delete_occurrence` exist and are used by `occurrences_service`. ✅
-- Backend import gate + `npm run build`: both **pass**.
+> **Update (`d8c9c15`):** the "NEW bug" below is resolved. The scheduler now stamps `last_notified_date=today` for **every** pending occurrence at display time (both branches), so an ignored summary no longer re-fires each minute. Proven by `tests/smoke_recurrence.py` — 5 runtime assertions pass: (1) app-off selects the whole pile once, (2) same-day re-sweep selects 0 (no storm), (3) next-day re-nag selects undone again, (4) mark-all-done stays gone, (5) dismiss is same-day-silent but re-nags next day. Both gates (backend import, `npm run build`) green.
 
-So ~80% landed. But the summary's "✅ All 6 complete" hides the following.
+### Blockers — all verified fixed ✅
+- **A (re-nag query):** [db.py:367-371](src/voice_task_board/db.py#L367) now selects `is_done = 0 AND (last_notified_date IS NULL OR last_notified_date < <today>)` and the `fired = 0` filter is **gone**. Re-nag can now actually re-select a fired-but-undone occurrence the next day. Correct.
+- **B (two-button semantics):** `mark_pile_resolved(task_id, done, notified_date)` now branches — done→`is_done=1, fired=1, last_notified_date`; dismiss→`fired=1, last_notified_date` (leaves `is_done=0`). `resolve_pile(task_id, done)` passes it through, and the scheduler calls it for **both** actions via `_handle_missed_summary_action`. Correct and matches the plan.
+- **C (non-blocking toast):** `show_missed_summary(task_title, count, callback=...)` is now callback-based and threaded ([notifications.py](src/voice_task_board/notifications.py)); the scheduler passes a `callback` and no longer waits ([scheduler.py:117-120](src/voice_task_board/scheduler.py#L117)). The sweep never blocks. Correct.
+- **C2 (Done-path pointer):** [occurrences_service.py:48](src/voice_task_board/occurrences_service.py#L48) now uses `db.current_occurrence(task_id)` (is_done-based). Correct.
+- **C3:** `list_pending_occurrences` is now **gone** from the source (no dead def). ✅
+- Import gate passes.
 
 ---
 
-## 🔴 Blocker A — Re-nag is dead on arrival: the sweep query still filters `fired = 0`
-**Plan:** an occurrence re-notifies once/day until done; the sweep must re-select already-`fired` occurrences whose `last_notified_date < today`.
-**Code:** [db.py:345-372](src/voice_task_board/db.py#L345) `list_occurrences_due_for_reminder` still has `AND occurrences.fired = 0` and **no `last_notified_date` clause**. Meanwhile the scheduler marks every pending occurrence `fired=1` ([scheduler.py:105-106](src/voice_task_board/scheduler.py#L105)). So once an occurrence fires, it **never re-appears** in the query → it can never re-nag. `set_occurrence_notified` is written but its value is **never read by any query**. **The entire re-nag feature is inert** — the gap from the prior run, now papered over with an unused column.
-**Fix:** change the query to `occurrences.is_done = 0 AND (last_notified_date IS NULL OR last_notified_date < <today>)`; drop the `fired = 0` filter. This is the single most important fix.
+## ✅ RESOLVED (`d8c9c15`) — re-fire storm on the ≥2 missed-pile path
+*(Kept for the record. Fixed: `last_notified_date` is now stamped at display time on both branches; `tests/smoke_recurrence.py` proves no same-day re-fire and correct next-day re-nag.)*
 
-## 🔴 Blocker B — Two-button choice is half-wired; "Dismiss" only works by accident
-**Plan:** "Dismiss all" and "Mark all as done" both mark the pile `fired=1, last_notified_date=today` so it stops re-summarizing; "Mark all" also sets `is_done=1`.
-**Code:** `mark_pile_resolved` ([db.py](src/voice_task_board/db.py)) and `resolve_pile(task_id)` **only** set `is_done=1`, and are called **only** on `"mark_done"` ([scheduler.py:114-117](src/voice_task_board/scheduler.py#L114)). On `"dismiss"` the code does nothing but the blanket `set_occurrence_notified(today)` at [scheduler.py:126-127](src/voice_task_board/scheduler.py#L126). A dismissed pile is therefore `fired=1, is_done=0`; today it doesn't re-summarize **only because the query is broken (Blocker A)**. The moment A is fixed correctly, "Dismiss" will re-summarize forever unless it also stamps `last_notified_date`. The plan's `mark_pile_resolved(task_id, occ_ids, done)` signature (with the `done` flag) was not implemented.
-**Fix:** add the `done` flag; call it for **both** buttons (done=False for Dismiss), always setting `fired=1, last_notified_date=today`, and `is_done=1` only when done.
+### Original finding — NEW bug introduced by the A/B fix
+The Blocker-A rewrite made the query `is_done=0 AND (last_notified_date IS NULL OR last_notified_date < today)`. But the scheduler still **marks every pending occurrence `fired=1`** at [scheduler.py:129-131](src/voice_task_board/scheduler.py#L129) **without stamping `last_notified_date`** on the ≥2 branch (it only stamps on the ≤1 branch, [scheduler.py:126-127](src/voice_task_board/scheduler.py#L126)). Trace the ≥2 case:
 
-## 🔴 Blocker C — Scheduler blocks on a 10s modal toast inside the sweep
-**Code:** [scheduler.py:112](src/voice_task_board/scheduler.py#L112) calls `notifications.show_missed_summary(...)` and **synchronously waits for the user's click** (it returns an action). This runs inside `_check_due_reminders`, the APScheduler job. With several recurring tasks each holding a missed pile, the sweep **serially blocks up to ~10s per task**, and the minute-cron can overlap/stack. The normal reminder toasts are fire-and-forget threads; this one isn't.
-**Fix:** make the summary non-blocking (callback-based, like `show_reminder`/`_show_status`); resolve via callback so the sweep never waits.
+1. Sweep finds 5 pending → fires **one** summary toast (async) → marks all 5 `fired=1`, **`last_notified_date` still NULL**.
+2. User ignores the toast (doesn't click). The callback never runs, so `mark_pile_resolved` never stamps the date.
+3. **Next minute**, the same 5 still match the query (`is_done=0`, `last_notified_date IS NULL`) → **another summary toast.** Every 60 seconds, forever, until the user clicks.
 
-## 🟠 C2 — `complete_occurrence` still uses `next_occurrence` (fired-based), not `current_occurrence`
-**Code:** [occurrences_service.py:48](src/voice_task_board/occurrences_service.py#L48) advances the parent pointer with `db.next_occurrence(task_id)`, still `WHERE fired = 0` ([db.py:649](src/voice_task_board/db.py#L649)). The scheduler was switched to `current_occurrence`, but this Done-path wasn't. After completing one instance, the pointer can skip an earlier fired-but-undone occurrence — the invariant violation, still live.
-**Fix:** use `current_occurrence` here too; consider deleting `next_occurrence` so nothing keys off `fired` for "current".
+So an *un-clicked* missed-pile now **re-summarizes every sweep** — a worse storm than the original. The fix correctly handles the *clicked* path (B) but not the *ignored* path. `fired=1` is set but, post-A, `fired` no longer gates the query — so marking it is now meaningless and the real throttle (`last_notified_date`) is missing on this branch.
 
-## 🟠 C3 — `list_pending_occurrences` is dead code
-Added per the plan but **never called** (grep: only its own def). Harmless, but it's the correct `is_done`-based selector the sweep *should* use — its non-use is a symptom of Blocker A. Either wire it into the sweep or remove it.
+Symmetrically, the ≤1 path stamps `last_notified_date` immediately ([scheduler.py:127](src/voice_task_board/scheduler.py#L127)) — good for re-nag — but that means a single occurrence is throttled correctly while a pile is not. Inconsistent.
 
-## 🟠 C4 — `last_notified_date` written by a blanket post-loop pass
-[scheduler.py:126-127](src/voice_task_board/scheduler.py#L126) stamps `last_notified_date=today` on **all** pending (including the summarized pile) after the branch. Once the query honors `last_notified_date` (A), the stamp should happen inside the notify/resolve paths so Dismiss vs Mark-all-done stay distinct (B), not as one blanket write.
+**Fix:** on the ≥2 branch, stamp `last_notified_date = today` for the whole pile **at display time** (not only on click), so an ignored summary won't re-fire until tomorrow. The click callback then only flips `is_done` (mark-done) or leaves it (dismiss). Equivalent: call `db.mark_pile_resolved(task_id, done=False, notified_date=today)` right after showing the toast, and have the "mark done" callback upgrade it to `done=True`.
 
-## 🟡 Minor
-- Index: plan wanted `idx_occ_done` (vs the old `idx_occ_fired`). Summary claims swapped — **verify** in migration 5. Cosmetic/perf.
-- Confirm migration 5 is **append-only** and `user_version` stepping stays linear (imports clean, so likely fine).
-- Frontend not reconciled: the missed-summary is **OS-toast only**; the in-app recurring-card captions/labels and `RecurringCompleteButton` scope wiring still need a pass against the plan's Decisions (1-year caption, "this vs series").
+> Also drop the now-meaningless `mark_occurrence_fired` loop at [scheduler.py:129-131](src/voice_task_board/scheduler.py#L129), or keep `fired` purely as "has been seen" bookkeeping — but it must not be mistaken for the throttle. The throttle is `last_notified_date` now.
+
+---
+
+## 🟡 Remaining minor
+- **Re-nag time-of-day:** the query re-nags any day where `last_notified_date < today` once the due-minus-lead has passed — i.e. as soon as the sweep runs after midnight, not at the occurrence's original time-of-day. The plan said "re-notify at its time-of-day." Minor UX deviation; acceptable if you don't mind morning re-nags, but note it.
+- **Index:** confirm migration 5 created `idx_occ_done` (plan) vs leftover `idx_occ_fired`. Perf-only.
+- **Frontend not reconciled:** missed-summary is OS-toast only; the in-app recurring-card 1-year caption, "this vs series" labels, and `RecurringCompleteButton` wiring still need a pass against the plan's Decisions.
 
 ---
 
 ## Remediation backlog (ordered)
-1. **Blocker A** — rewrite `list_occurrences_due_for_reminder`: select `is_done=0 AND (last_notified_date IS NULL OR last_notified_date < today)`; drop `fired=0`. Re-nag depends entirely on this.
-2. **Blocker B** — `mark_pile_resolved(task_id, done: bool)`; call for both buttons; set `fired=1,last_notified_date=today` always, `is_done=1` only when done.
-3. **Blocker C** — make `show_missed_summary` non-blocking; resolve via callback so the sweep never waits.
-4. **C2** — `complete_occurrence` → `current_occurrence`; retire `next_occurrence`.
-5. **C3/C4** — use `list_pending_occurrences` as the sweep selector (or delete); move the `last_notified_date` write into the notify/resolve paths.
-6. **Runtime smoke test as the new gate** — don't rely on import/build. Simulate app-off (insert past-due occurrences) and confirm: (a) one summary, not N toasts; (b) Dismiss doesn't re-summarize next sweep; (c) a single undone weekly re-nags the next day; (d) completing one instance advances to the correct earliest-undone occurrence.
+1. ~~**NEW bug** — stamp `last_notified_date` at display time.~~ ✅ **Done** (`d8c9c15`).
+2. ~~**Runtime smoke test as the gate.**~~ ✅ **Done** — `tests/smoke_recurrence.py` (5 assertions, all pass).
+3. **Re-nag time-of-day** (optional) — current code re-nags after midnight date-rollover, not at the occurrence's original time-of-day. Gate on the time too if you want same-time nags. Minor UX; defer unless wanted.
+4. **Frontend reconciliation** (remaining real work) — the missed-summary is OS-toast only; the in-app recurring-card 1-year caption, "this vs series" labels, and `RecurringCompleteButton` wiring still need a pass against the plan's Decisions.
 
-> Root cause across both Haiku runs: **names and structure are present, but the read/notify path that actually triggers behavior lags the writes.** Gates (import + build) pass because nothing is *syntactically* wrong — yet the features don't fire. The gate from here should be a runtime smoke test, not compilation.
+> Root-cause note for the record: each Haiku pass fixes the named spot but introduces an adjacent off-by-one in the **read/throttle path**. Blocker A moved the throttle from `fired` to `last_notified_date`, but the write side only half-followed. A runtime smoke test (not compilation) is the right gate to close this loop.
 
-## Files reviewed (pass)
-`db.py`, `scheduler.py`, `recurrence.py`, `recurrence_service.py`, `occurrences_service.py`, `notifications.py`, `apply_intent.py`, `archive.py`, `remote_sync.py`, `gemini.py`, `webview_app.py`, and `docs/RECURRENCE_FIXES_SUMMARY.md`. Gates: backend import (pass), `npm run build` (pass).
+## Files reviewed
+`db.py`, `scheduler.py`, `recurrence.py`, `recurrence_service.py`, `occurrences_service.py`, `notifications.py`, `apply_intent.py`, `archive.py`. Gate: backend import (pass).

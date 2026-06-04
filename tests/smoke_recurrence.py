@@ -85,4 +85,32 @@ r3 = [(o,t) for (o,t) in sweep_select() if t.id==tid2]
 assert len(r3) == 2, f"dismissed-but-undone should re-nag next day, got {len(r3)}"
 print(f"[5] dismiss -> same-day silent ({len(r2)}), next-day re-nag ({len(r3)})  OK")
 
+# ---- Assertion 6: editing the rule re-materializes idempotently (no stacking) ----
+# materialize() must delete FUTURE occurrences before regenerating. Simulate by
+# generating a future window twice via the engine + the delete-future contract.
+import voice_task_board.recurrence as rec
+tid3 = db.add_task("standup", "default", recurrence_rule="FREQ=DAILY", mirror_to_remote=False)
+db.set_recurrence(tid3, "FREQ=DAILY", None)
+future = rec.generate_occurrences("FREQ=DAILY", now_utc, None, None, horizon_days=10)
+db.add_occurrences(tid3, future)
+first_count = len(db.list_occurrences(tid3))
+# Simulate an edit re-materialize the way materialize() does it: clear the
+# undone schedule, then regenerate. Must NOT stack.
+db.delete_unfinished_occurrences(tid3)
+db.add_occurrences(tid3, future)
+second_count = len(db.list_occurrences(tid3))
+assert second_count == first_count, f"BUG: edit stacked occurrences {first_count} -> {second_count}"
+print(f"[6] edit re-materialize -> {first_count} == {second_count} (no stacking)  OK")
+
+# ---- Assertion 7: done occurrences survive re-materialize (history kept) ----
+# Mark one occurrence done, then re-materialize; the done one must remain.
+occs = db.list_occurrences(tid3)
+db.mark_occurrence_done(occs[0].id)
+done_before = db.count_done_occurrences(tid3)
+db.delete_unfinished_occurrences(tid3)
+db.add_occurrences(tid3, future)
+done_after = db.count_done_occurrences(tid3)
+assert done_after == done_before == 1, f"BUG: done history lost on re-materialize ({done_before}->{done_after})"
+print(f"[7] re-materialize keeps done history -> {done_after} done preserved  OK")
+
 print("\nALL SMOKE ASSERTIONS PASSED")
