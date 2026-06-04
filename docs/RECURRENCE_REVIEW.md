@@ -49,7 +49,17 @@ Symmetrically, the ≤1 path stamps `last_notified_date` immediately ([scheduler
 1. ~~**NEW bug** — stamp `last_notified_date` at display time.~~ ✅ **Done** (`d8c9c15`).
 2. ~~**Runtime smoke test as the gate.**~~ ✅ **Done** — `tests/smoke_recurrence.py` (5 assertions, all pass).
 3. **Re-nag time-of-day** (optional) — current code re-nags after midnight date-rollover, not at the occurrence's original time-of-day. Gate on the time too if you want same-time nags. Minor UX; defer unless wanted.
-4. **Frontend reconciliation** (remaining real work) — the missed-summary is OS-toast only; the in-app recurring-card 1-year caption, "this vs series" labels, and `RecurringCompleteButton` wiring still need a pass against the plan's Decisions.
+4. ~~**Frontend reconciliation**~~ ✅ **Done** (`e4678c6`). Found and fixed real bugs while reconciling:
+   - **Manual-edit recurrence was broken end-to-end:** `handleSave` sent the rule via `updateTaskDue` (no UNTIL, no text→RRULE, no materialize) and **dropped the until date**. Now routed through `api.setRecurrence(rule, until)` — the single path that converts text→RRULE, applies UNTIL, and (re)materializes. Recurrence from the UI now actually works, not just from voice.
+   - **UNTIL round-trip:** exposed `is_recurrence` + `recurrence_until` in `_task_to_dict` and the `Task` type; `openEdit` reads it; caption shows "Repeats until \<date\>".
+   - **Caption** now matches the plan wording and only claims Google sync when actually mirrored (it previously implied sync for local-only recurring tasks).
+   - **`materialize` made idempotent** (`db.delete_unfinished_occurrences`): editing a rule no longer stacks a second occurrence window or duplicates the boundary occurrence; done history preserved; stale mirrored ones deleted on Google. (A boundary off-by-one in the original `delete_future_occurrences(>now)` approach was caught by the smoke test.)
+   - `RecurrenceSelect`, `RecurringCompleteButton` (this/series), `RecurringDoneCard` confirmed wired into `TaskCard`/`Column`.
+
+## Final status: 🟢 Working end-to-end, verified
+- Backend smoke `tests/smoke_recurrence.py`: **7/7** (app-off pile, no same-day storm, next-day re-nag, mark-all-done, dismiss, edit-idempotency, done-history-preserved).
+- Backend import ✅. Frontend `npm run build` ✅. Frontend `vitest` **20/20** ✅.
+- Commits: `d8c9c15` (re-fire storm + smoke test) → `e4678c6` (frontend wiring + manual-edit/idempotency fixes).
 
 > Root-cause note for the record: each Haiku pass fixes the named spot but introduces an adjacent off-by-one in the **read/throttle path**. Blocker A moved the throttle from `fired` to `last_notified_date`, but the write side only half-followed. A runtime smoke test (not compilation) is the right gate to close this loop.
 
