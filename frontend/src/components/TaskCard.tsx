@@ -7,6 +7,7 @@ import { api } from '@/api'
 import { useToast } from '@/context/ToastContext'
 import { formatDue, toLocalInput, isDueSoon, isOverdue } from './TaskCard.helpers'
 import { RecurrenceSelect } from './RecurrenceSelect'
+import { RecurringCompleteButton } from './RecurringCompleteButton'
 
 interface TaskCardProps {
   task: Task
@@ -259,12 +260,26 @@ export const TaskCard: React.FC<TaskCardProps> = ({ task, onChanged }) => {
             {dueLabel && (
               <p className="task-card-due" style={{ fontSize: '11px', color: overdue ? 'var(--color-danger)' : dueSoon ? 'var(--color-warning)' : 'var(--color-text-muted)', marginBottom: '2px', fontWeight: overdue || dueSoon ? 600 : 400, display: 'flex', alignItems: 'center', gap: '4px' }}>
                 <Clock size={12} /> {dueLabel}
-                {task.recurrence_rule && <span title={task.recurrence_rule} style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><Repeat size={12} /> {task.recurrence_rule}</span>}
+              </p>
+            )}
+
+            {/* Recurrence info */}
+            {task.recurrence_rule && (
+              <p style={{ fontSize: '10px', color: 'var(--color-text-faint)', marginBottom: '4px', fontStyle: 'italic' }}>
+                <span style={{ marginRight: '8px' }}>
+                  <Repeat size={11} style={{ display: 'inline', marginRight: '2px', verticalAlign: '-1px' }} /> 
+                  Repeating for up to 1 year
+                </span>
               </p>
             )}
 
             {/* Status badges */}
             <div className="task-card-tags" style={{ display: 'flex', gap: '4px', flexWrap: 'wrap', marginTop: '2px' }}>
+              {task.recurrence_rule && (
+                <span className="task-card-tag task-card-tag--info" title={`Repeats: ${task.recurrence_rule}`} style={{ fontSize: '10px', padding: '2px 6px' }}>
+                  <Repeat size={11} style={{ display: 'inline', marginRight: '2px' }} /> Repeating
+                </span>
+              )}
               {task.has_drift && (
                 <span className="task-card-tag task-card-tag--warning" title="Remote task differs from local"><AlertTriangle size={12} /> remote differs</span>
               )}
@@ -285,7 +300,11 @@ export const TaskCard: React.FC<TaskCardProps> = ({ task, onChanged }) => {
 
           <div className="task-card-actions" style={{ display: 'flex', flexDirection: 'column', gap: '4px', flexShrink: 0 }} {...stopDrag}>
             <button className="task-card-action task-card-action--primary" onClick={openEdit} title="Edit"><Pencil size={14} /></button>
-            <button className="task-card-action task-card-action--success" onClick={handleComplete} title="Mark done"><Check size={14} /></button>
+            {task.recurrence_rule ? (
+              <RecurringCompleteButton task={task} onChanged={onChanged} />
+            ) : (
+              <button className="task-card-action task-card-action--success" onClick={handleComplete} title="Mark done"><Check size={14} /></button>
+            )}
             <button
               className="task-card-action task-card-action--mirror"
               onClick={handleToggleMirror}
