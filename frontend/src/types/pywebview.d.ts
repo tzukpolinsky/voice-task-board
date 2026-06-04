@@ -58,6 +58,11 @@ interface PywebviewApi {
   disconnect_remote_provider(): Promise<void>
   submit_confirmation(action: string): Promise<void>
   open_url(url: string): Promise<void>
+
+  // Occurrences / Recurrence
+  complete_occurrence_choice(task_id: number, scope: 'instance' | 'series'): Promise<void>
+  get_occurrences(task_id: number): Promise<Array<{ id: number; due_at_utc: string; fired: number; is_done: number }>>
+  set_recurrence(task_id: number, repeat_text: string | null, until: string | null): Promise<void>
 }
 
 declare global {

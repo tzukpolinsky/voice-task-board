@@ -235,6 +235,74 @@ class Api:
         except Exception as e:
             logger.error(f"Failed to open URL {url}: {e}")
 
+    def complete_occurrence_choice(self, task_id: int, scope: str) -> None:
+        """Complete a recurring occurrence or end the whole series.
+        
+        Args:
+            task_id: The task ID
+            scope: Either "instance" (complete one occurrence) or "series" (end series)
+        """
+        db = get_db()
+        
+        if scope == "instance":
+            # Complete the current occurrence
+            from voice_task_board import occurrences_service
+            task = db.get_task(task_id)
+            if task:
+                next_occ = db.next_occurrence(task_id)
+                if next_occ:
+                    occurrences_service.complete_occurrence(next_occ.id)
+        elif scope == "series":
+            # End the whole series
+            from voice_task_board import occurrences_service
+            occurrences_service.end_series(task_id)
+
+    def get_occurrences(self, task_id: int) -> list[dict]:
+        """Get all occurrences for a recurring task (for Done card history)."""
+        db = get_db()
+        occurrences = db.list_occurrences(task_id)
+        
+        result = []
+        for occ in occurrences:
+            result.append({
+                "id": occ.id,
+                "due_at_utc": occ.due_at_utc,
+                "fired": occ.fired,
+                "is_done": occ.is_done,
+            })
+        return result
+
+    def set_recurrence(self, task_id: int, repeat_text: str | None, until: str | None) -> None:
+        """Set or update recurrence for a task via manual edit.
+        
+        Args:
+            task_id: The task ID
+            repeat_text: Recurrence text (e.g. "every monday"), or None to remove
+            until: Until date (ISO format), or None for open-ended
+        """
+        db = get_db()
+        
+        if not repeat_text:
+            # Clear recurrence
+            db.set_recurrence(task_id, None, None)
+            # Also clear any existing occurrences
+            db.delete_future_occurrences(task_id, "1970-01-01")
+            return
+        
+        # Materialize the new recurrence
+        from voice_task_board import recurrence_service
+        
+        # Store the text temporarily, materialize will convert it
+        db.set_recurrence(task_id, repeat_text, until)
+        
+        # Materialize will convert text → RRULE
+        config = get_config()
+        gemini = None
+        if config.gemini_api_key:
+            gemini = GeminiBackend(config.gemini_api_key)
+        
+        recurrence_service.materialize(task_id, gemini_backend=gemini)
+
 
 _window: webview.Window | None = None
 _hotkey_listener: Any = None

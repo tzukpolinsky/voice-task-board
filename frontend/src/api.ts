@@ -95,6 +95,18 @@ export const api = {
   submitConfirmation: async (action: string): Promise<void> => {
     return window.pywebview?.api.submit_confirmation(action)
   },
+
+  completeOccurrenceChoice: async (taskId: number, scope: 'instance' | 'series'): Promise<void> => {
+    return window.pywebview?.api.complete_occurrence_choice(taskId, scope)
+  },
+
+  getOccurrences: async (taskId: number): Promise<Array<{ id: number; due_at_utc: string; fired: number; is_done: number }>> => {
+    return window.pywebview?.api.get_occurrences(taskId) ?? []
+  },
+
+  setRecurrence: async (taskId: number, repeatText: string | null, until: string | null): Promise<void> => {
+    return window.pywebview?.api.set_recurrence(taskId, repeatText, until)
+  },
 }
 
 export {}
