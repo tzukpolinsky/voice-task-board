@@ -59,11 +59,9 @@ def _ensure_aumid_shortcut() -> None:
 
 _snooze_callback: Callable[[int], None] | None = None
 
-# The toaster and any in-flight toasts must outlive show_toast() — WinRT
-# delivers toasts asynchronously and will silently drop them if the Python
-# objects are garbage-collected before the OS picks them up.
-_toaster: Any = None
-_toaster_init_failed: bool = False
+# Thread-local toaster storage. Each thread gets its own COM object to avoid
+# cross-apartment disconnection errors. WinRT toasters are not thread-safe.
+_toaster_local = threading.local()
 _live_toasts: list[Any] = []
 _live_toasts_lock = threading.Lock()
 
@@ -74,17 +72,26 @@ def set_snooze_callback(fn: Callable[[int], None]) -> None:
 
 
 def _get_toaster() -> Any:
-    global _toaster, _toaster_init_failed
-    if _toaster is not None or _toaster_init_failed:
-        return _toaster
+    """Get or create a toaster for the current thread.
+
+    Each thread gets its own COM toaster object to avoid cross-apartment
+    disconnection errors. The first call on a thread initializes it.
+    """
+    if hasattr(_toaster_local, 'toaster'):
+        return _toaster_local.toaster
+
+    if hasattr(_toaster_local, 'init_failed'):
+        return None
+
     try:
         _ensure_aumid_shortcut()
         from windows_toasts import InteractableWindowsToaster
-        _toaster = InteractableWindowsToaster(applicationText=_APP_NAME, notifierAUMID=_AUMID)
+        _toaster_local.toaster = InteractableWindowsToaster(applicationText=_APP_NAME, notifierAUMID=_AUMID)
+        return _toaster_local.toaster
     except Exception as e:
         logger.warning(f"windows-toasts unavailable: {e}")
-        _toaster_init_failed = True
-    return _toaster
+        _toaster_local.init_failed = True
+        return None
 
 
 def _retain_toast(toast: Any) -> None:

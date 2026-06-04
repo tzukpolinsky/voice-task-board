@@ -16,7 +16,7 @@ os.environ.setdefault("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", "--disable-gpu")
 from voice_task_board.hotkey import HotkeyListener
 from voice_task_board.tray import create_tray_icon
 from voice_task_board.logging_setup import configure_logging
-from voice_task_board.audio import record_while_held
+from voice_task_board.audio import record_while_held, validate_audio_device
 from voice_task_board.config import get_config
 from voice_task_board.gemini import GeminiBackend
 from voice_task_board.apply_intent import apply, ApplyResult
@@ -81,6 +81,9 @@ def main() -> int:
     if config.remote_provider and config.remote_tokens:
         remote_sync.check_drift_on_startup()
         remote_sync.retry_pending()
+
+    # Validate cached audio device; clear if it's disconnected
+    validate_audio_device()
 
     def on_hotkey_pressed() -> None:
         global _recording_active
@@ -181,7 +184,11 @@ def main() -> int:
                 logger.info(f"Input error: {e}")
             except Exception as e:
                 logger.exception(f"Recording/intent/apply failed: {e}")
-                notif.show_status(f"Error: {str(e)[:50]}")
+                # Check if it's a device error during recording
+                if "input device" in str(e).lower() or "portaudio" in str(e).lower():
+                    notif.show_status("Microphone disconnected — please reconnect and try again")
+                else:
+                    notif.show_status(f"Error: {str(e)[:50]}")
             finally:
                 with _recording_lock:
                     _recording_active = False

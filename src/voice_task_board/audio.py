@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import contextlib
+import json
 import logging
 import numpy as np
 import sounddevice as sd
 import threading
 import time
+from pathlib import Path
 from typing import Any, Callable, Iterator
 
 
@@ -13,6 +15,7 @@ logger = logging.getLogger(__name__)
 
 _SAMPLE_RATE = 16000
 _MAX_RECORDING_SECONDS = 30
+_DEVICE_CACHE_FILE = Path.home() / ".cache" / "voice_task_board" / "audio_device.json"
 
 _PREFERRED_HOST_APIS = ("Windows WASAPI", "Windows DirectSound", "MME", "Windows WDM-KS")
 # MME is kept in the fallback chain as a last resort, but it's too fragile to
@@ -126,11 +129,32 @@ def _device_info(device: int | None) -> dict[str, Any]:
     return sd.query_devices(device, kind="input")
 
 
+def _get_cached_device() -> int | None:
+    """Load the last-known-working device from disk cache."""
+    try:
+        if _DEVICE_CACHE_FILE.exists():
+            data = json.loads(_DEVICE_CACHE_FILE.read_text())
+            return data.get("device_index")
+    except Exception:
+        pass
+    return None
+
+
+def _save_working_device(device: int) -> None:
+    """Persist the working device index to disk."""
+    try:
+        _DEVICE_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _DEVICE_CACHE_FILE.write_text(json.dumps({"device_index": device}))
+        logger.debug(f"Cached working device: {device}")
+    except Exception as e:
+        logger.debug(f"Could not cache audio device: {e}")
+
+
 def _candidate_input_devices() -> list[int]:
     """Ordered list of input device indices to try, best first.
 
-    Starts with whatever `_pick_input_device` prefers, then every other input
-    device grouped by host-API preference (WASAPI > DirectSound > MME > WDM-KS).
+    Tries in order: cached device (fastest), system preferred, then all others
+    grouped by host-API preference (WASAPI > DirectSound > MME > WDM-KS).
     De-duplicated, order-preserving. This is what makes recording resilient when
     the "best" backend is blocked: we fall through to one that actually opens.
     """
@@ -140,7 +164,10 @@ def _candidate_input_devices() -> list[int]:
         if isinstance(idx, int) and idx >= 0 and idx not in ordered:
             ordered.append(idx)
 
-    # 1. The preferred pick (system default / first preferred host API).
+    # 1. Try the cached device first (no probing delay if it still works).
+    add(_get_cached_device())
+
+    # 2. The preferred pick (system default / first preferred host API).
     add(_pick_input_device())
 
     # 2. Every input device, grouped by host-API preference order.
@@ -286,6 +313,7 @@ def _open_input_stream(callback: Callable[..., None]) -> tuple[sd.InputStream, i
                 first_openable = (device, rate, channels, info)
             if sig:
                 stream = _open(device, rate, channels)
+                _save_working_device(device)
                 logger.info(
                     f"Opened InputStream on device={device} [{_hostapi_name(info)}] "
                     f"at {rate} Hz, {channels} ch, float32 (probed: signal present)"
@@ -298,6 +326,7 @@ def _open_input_stream(callback: Callable[..., None]) -> tuple[sd.InputStream, i
     if first_openable is not None:
         device, rate, channels, info = first_openable
         stream = _open(device, rate, channels)
+        _save_working_device(device)
         logger.warning(
             f"No input device showed a live signal; using device={device} "
             f"[{_hostapi_name(info)}] at {rate} Hz, {channels} ch. If recordings "
@@ -336,6 +365,31 @@ def _resample_float32(pcm: np.ndarray, src_rate: int, dst_rate: int = _SAMPLE_RA
 def _float32_to_int16(pcm: np.ndarray) -> np.ndarray:
     clipped = np.clip(pcm, -1.0, 1.0)
     return (clipped * 32767.0).astype(np.int16)
+
+
+def validate_audio_device() -> bool:
+    """Test the cached audio device at app startup. Returns True if valid, False otherwise.
+
+    If the cached device no longer works (e.g., hardware was disconnected), clear the
+    cache so the next recording will probe for a working device.
+    """
+    cached = _get_cached_device()
+    if cached is None:
+        return True  # No cache yet, will probe on first recording
+
+    try:
+        info = _device_info(cached)
+        for rate, channels in _device_formats(info):
+            if _probe_has_signal(cached, rate, channels):
+                logger.debug(f"Audio device {cached} validated at startup")
+                return True
+    except Exception as e:
+        logger.debug(f"Cached device {cached} validation failed: {e}")
+
+    # Cached device is dead, clear it so we probe on next recording
+    _DEVICE_CACHE_FILE.unlink(missing_ok=True)
+    logger.info(f"Cleared invalid cached device {cached}")
+    return False
 
 
 def record_while_held(is_held: Callable[[], bool], poll_interval: float = 0.03) -> bytes:
