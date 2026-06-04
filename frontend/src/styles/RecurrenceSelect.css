@@ -1,0 +1,187 @@
+.recurrence-select {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.recurrence-select > label {
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--text-secondary, #666);
+}
+
+.recurrence-trigger {
+  position: relative;
+}
+
+.recurrence-button {
+  width: 100%;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--border-color, #ddd);
+  border-radius: 4px;
+  background: var(--bg-secondary, #fff);
+  color: var(--text-primary, #000);
+  font-size: 0.875rem;
+  cursor: pointer;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  transition: border-color 0.2s;
+}
+
+.recurrence-button:hover:not(:disabled) {
+  border-color: var(--accent-color, #0066cc);
+}
+
+.recurrence-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.dropdown-icon {
+  font-size: 0.625rem;
+  margin-left: 0.5rem;
+}
+
+.recurrence-dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  margin-top: 0.25rem;
+  background: var(--bg-secondary, #fff);
+  border: 1px solid var(--border-color, #ddd);
+  border-radius: 4px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  z-index: 1000;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.recurrence-search {
+  width: 100%;
+  padding: 0.5rem;
+  border: none;
+  border-bottom: 1px solid var(--border-color, #ddd);
+  font-size: 0.875rem;
+  box-sizing: border-box;
+}
+
+.recurrence-search:focus {
+  outline: none;
+  background-color: var(--bg-hover, #f5f5f5);
+}
+
+.recurrence-options {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.recurrence-option {
+  padding: 0.5rem 0.75rem;
+  border: none;
+  background: none;
+  color: var(--text-primary, #000);
+  font-size: 0.875rem;
+  cursor: pointer;
+  text-align: left;
+  transition: background-color 0.2s;
+}
+
+.recurrence-option:hover {
+  background-color: var(--bg-hover, #f5f5f5);
+}
+
+.recurrence-option.selected {
+  background-color: var(--accent-light, #e6f2ff);
+  color: var(--accent-color, #0066cc);
+  font-weight: 500;
+}
+
+.custom-repeat-input {
+  padding: 0.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.custom-text-input {
+  padding: 0.5rem;
+  border: 1px solid var(--border-color, #ddd);
+  border-radius: 4px;
+  font-size: 0.875rem;
+  background: var(--bg-secondary, #fff);
+  color: var(--text-primary, #000);
+}
+
+.custom-text-input:focus {
+  outline: none;
+  border-color: var(--accent-color, #0066cc);
+}
+
+.custom-buttons {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.save-btn,
+.cancel-btn {
+  flex: 1;
+  padding: 0.5rem;
+  border: 1px solid var(--border-color, #ddd);
+  border-radius: 4px;
+  font-size: 0.75rem;
+  cursor: pointer;
+  font-weight: 500;
+}
+
+.save-btn {
+  background: var(--accent-color, #0066cc);
+  color: white;
+  border-color: var(--accent-color, #0066cc);
+}
+
+.save-btn:hover {
+  opacity: 0.9;
+}
+
+.cancel-btn {
+  background: var(--bg-secondary, #fff);
+  color: var(--text-primary, #000);
+}
+
+.cancel-btn:hover {
+  background-color: var(--bg-hover, #f5f5f5);
+}
+
+.until-input-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.until-input-group > label {
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--text-secondary, #666);
+}
+
+.until-input {
+  padding: 0.5rem;
+  border: 1px solid var(--border-color, #ddd);
+  border-radius: 4px;
+  font-size: 0.875rem;
+  background: var(--bg-secondary, #fff);
+  color: var(--text-primary, #000);
+}
+
+.until-input:focus {
+  outline: none;
+  border-color: var(--accent-color, #0066cc);
+}
+
+.until-input:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}

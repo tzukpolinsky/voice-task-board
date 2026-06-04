@@ -6,6 +6,7 @@ import type { Task } from '@/types/domain'
 import { api } from '@/api'
 import { useToast } from '@/context/ToastContext'
 import { formatDue, toLocalInput, isDueSoon, isOverdue } from './TaskCard.helpers'
+import { RecurrenceSelect } from './RecurrenceSelect'
 
 interface TaskCardProps {
   task: Task
@@ -30,7 +31,8 @@ export const TaskCard: React.FC<TaskCardProps> = ({ task, onChanged }) => {
   const [dueInput, setDueInput] = useState('')
   const [isFullDayEdit, setIsFullDayEdit] = useState(false)
   const [leadTimeEdit, setLeadTimeEdit] = useState(30)
-  const [recurrenceEdit, setRecurrenceEdit] = useState('')
+  const [recurrenceEdit, setRecurrenceEdit] = useState<string | null>(null)
+  const [untilEdit, setUntilEdit] = useState<string | null>(null)
   const [togglingMirror, setTogglingMirror] = useState(false)
 
   const style = {
@@ -56,7 +58,8 @@ export const TaskCard: React.FC<TaskCardProps> = ({ task, onChanged }) => {
     setDueInput(toLocalInput(task))
     setIsFullDayEdit(task.is_full_day)
     setLeadTimeEdit(task.lead_time_minutes)
-    setRecurrenceEdit(task.recurrence_rule ?? '')
+    setRecurrenceEdit(task.recurrence_rule ?? null)
+    setUntilEdit(null) // TODO: read from task once stored
     setEditing(true)
   }
 
@@ -102,7 +105,7 @@ export const TaskCard: React.FC<TaskCardProps> = ({ task, onChanged }) => {
         dueTz,
         isFullDayEdit,
         leadTimeEdit,
-        recurrenceEdit.trim() || null,
+        recurrenceEdit,
       )
 
       setEditing(false)
@@ -226,14 +229,14 @@ export const TaskCard: React.FC<TaskCardProps> = ({ task, onChanged }) => {
           )}
 
           {/* Recurrence */}
-          <div className="task-edit-row">
-            <label className="task-edit-label">Repeat:</label>
-            <input
-              type="text"
+          <div className="task-edit-row" {...stopDrag}>
+            <RecurrenceSelect
               value={recurrenceEdit}
-              onChange={(e) => setRecurrenceEdit(e.target.value)}
-              placeholder="e.g. every day, every monday at 09:00"
-              className="task-edit-input task-edit-input--inline"
+              until={untilEdit}
+              onChange={(repeat, until) => {
+                setRecurrenceEdit(repeat)
+                setUntilEdit(until)
+              }}
             />
           </div>
 
