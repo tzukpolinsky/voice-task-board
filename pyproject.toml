@@ -20,6 +20,7 @@ dependencies = [
   "tzlocal>=5.0",
   "pycaw>=20240210",
   "comtypes>=1.2",
+  "python-dateutil>=2.8.2",
 ]
 
 [project.optional-dependencies]

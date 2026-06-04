@@ -152,7 +152,7 @@ export const TaskCard: React.FC<TaskCardProps> = ({ task, onChanged }) => {
       {...(editing ? {} : listeners)}
     >
       {editing ? (
-        <div {...stopDrag}>
+        <div className="task-edit" {...stopDrag}>
           <input
             autoFocus
             type="text"
@@ -163,27 +163,27 @@ export const TaskCard: React.FC<TaskCardProps> = ({ task, onChanged }) => {
               if (e.key === 'Enter' && !e.shiftKey) handleSave()
               if (e.key === 'Escape') handleCancel()
             }}
-            style={inputStyle}
+            className="task-edit-input task-edit-input--title"
           />
           <textarea
             value={description}
             onChange={(e) => setDescription(e.target.value)}
             onKeyDown={(e) => e.stopPropagation()}
             placeholder="Description (optional)"
-            rows={2}
-            style={textareaStyle}
+            rows={4}
+            className="task-edit-input task-edit-input--area"
           />
 
           {/* Due date row */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px', flexWrap: 'wrap' }}>
-            <label style={{ fontSize: '12px', color: 'var(--color-text-secondary)', flexShrink: 0 }}>Due:</label>
+          <div className="task-edit-row">
+            <label className="task-edit-label">Due:</label>
             <input
               type={isFullDayEdit ? 'date' : 'datetime-local'}
               value={dueInput}
               onChange={(e) => setDueInput(e.target.value)}
-              style={{ fontSize: '12px', padding: '4px 6px', border: '1px solid var(--color-border-strong)', borderRadius: '3px', flex: 1, minWidth: 0 }}
+              className="task-edit-input task-edit-input--inline"
             />
-            <label style={{ fontSize: '12px', color: 'var(--color-text-secondary)', display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0 }}>
+            <label className="task-edit-check">
               <input
                 type="checkbox"
                 checked={isFullDayEdit}
@@ -199,7 +199,7 @@ export const TaskCard: React.FC<TaskCardProps> = ({ task, onChanged }) => {
               <button
                 onClick={() => setDueInput('')}
                 title="Clear due date"
-                style={{ fontSize: '11px', padding: '2px 6px', background: 'var(--color-surface-alt)', border: '1px solid var(--color-border-strong)', borderRadius: '3px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', lineHeight: 1 }}
+                className="task-edit-clear"
               >
                 <X size={12} />
               </button>
@@ -208,12 +208,12 @@ export const TaskCard: React.FC<TaskCardProps> = ({ task, onChanged }) => {
 
           {/* Lead time — only when due date is set */}
           {dueInput && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
-              <label style={{ fontSize: '12px', color: 'var(--color-text-secondary)', flexShrink: 0 }}>Remind:</label>
+            <div className="task-edit-row">
+              <label className="task-edit-label">Remind:</label>
               <select
                 value={leadTimeEdit}
                 onChange={(e) => setLeadTimeEdit(Number(e.target.value))}
-                style={{ fontSize: '12px', padding: '4px 6px', border: '1px solid var(--color-border-strong)', borderRadius: '3px' }}
+                className="task-edit-input task-edit-input--inline"
               >
                 <option value={10}>10 min before</option>
                 <option value={15}>15 min before</option>
@@ -226,18 +226,18 @@ export const TaskCard: React.FC<TaskCardProps> = ({ task, onChanged }) => {
           )}
 
           {/* Recurrence */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
-            <label style={{ fontSize: '12px', color: 'var(--color-text-muted)', flexShrink: 0 }}>Repeat:</label>
+          <div className="task-edit-row">
+            <label className="task-edit-label">Repeat:</label>
             <input
               type="text"
               value={recurrenceEdit}
               onChange={(e) => setRecurrenceEdit(e.target.value)}
               placeholder="e.g. every day, every monday at 09:00"
-              style={{ fontSize: '12px', padding: '4px 6px', border: '1px solid var(--color-border-strong)', borderRadius: '3px', flex: 1 }}
+              className="task-edit-input task-edit-input--inline"
             />
           </div>
 
-          <div style={{ display: 'flex', gap: '4px', justifyContent: 'flex-end' }}>
+          <div className="task-edit-actions">
             <button onClick={handleCancel} className="btn-secondary">Cancel</button>
             <button onClick={handleSave} className="btn-primary">Save</button>
           </div>
@@ -298,28 +298,3 @@ export const TaskCard: React.FC<TaskCardProps> = ({ task, onChanged }) => {
     </div>
   )
 }
-
-const inputStyle: React.CSSProperties = {
-  width: '100%',
-  padding: '6px',
-  fontSize: '14px',
-  fontWeight: 500,
-  border: '1px solid var(--color-accent)',
-  borderRadius: '3px',
-  marginBottom: '6px',
-  boxSizing: 'border-box',
-}
-
-const textareaStyle: React.CSSProperties = {
-  width: '100%',
-  padding: '6px',
-  fontSize: '12px',
-  border: '1px solid var(--color-border-strong)',
-  borderRadius: '3px',
-  marginBottom: '6px',
-  boxSizing: 'border-box',
-  resize: 'vertical',
-  fontFamily: 'inherit',
-}
-
-

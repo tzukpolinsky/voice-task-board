@@ -208,6 +208,39 @@ body {
 .task-card-tag--neutral { background: var(--color-neutral-bg); color: var(--color-neutral); }
 .task-card-tag--success { background: var(--color-success-bg); color: var(--color-success); }
 
+/* ===== Task card edit mode ===== */
+.task-edit { display: flex; flex-direction: column; gap: 8px; }
+.task-edit-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.task-edit-label { font-size: 12px; color: var(--color-text-secondary); flex-shrink: 0; }
+.task-edit-input {
+  width: 100%; background: var(--color-bg); color: var(--color-text);
+  border: 1px solid var(--color-border-strong); border-radius: var(--radius-sm);
+  padding: 8px 10px; font-size: 13px; font-family: inherit;
+  transition: border-color .15s, box-shadow .15s;
+}
+.task-edit-input::placeholder { color: var(--color-text-tertiary); }
+.task-edit-input:focus { outline: none; border-color: var(--color-primary); box-shadow: 0 0 0 3px var(--color-primary-soft); }
+.task-edit-input--title { font-size: 14px; font-weight: 600; }
+.task-edit-input--inline { width: auto; flex: 1; min-width: 0; padding: 6px 8px; font-size: 12px; }
+.task-edit-input--area { min-height: 92px; font-size: 14px; line-height: 1.5; }
+textarea.task-edit-input { resize: vertical; }
+/* Native date/time picker: render dark and keep the click indicator visible/clickable */
+.task-edit-input[type="date"], .task-edit-input[type="datetime-local"] { color-scheme: dark; cursor: pointer; }
+[data-theme="light"] .task-edit-input[type="date"],
+[data-theme="light"] .task-edit-input[type="datetime-local"] { color-scheme: light; }
+.task-edit-input::-webkit-calendar-picker-indicator { filter: invert(0.8); cursor: pointer; opacity: 0.9; }
+[data-theme="light"] .task-edit-input::-webkit-calendar-picker-indicator { filter: none; }
+.task-edit-check { display: flex; align-items: center; gap: 5px; font-size: 12px; color: var(--color-text-secondary); flex-shrink: 0; cursor: pointer; }
+.task-edit-clear {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 30px; height: 30px; flex-shrink: 0;
+  background: var(--color-surface-alt); color: var(--color-text-secondary);
+  border: 1px solid var(--color-border-strong); border-radius: var(--radius-sm);
+  cursor: pointer; transition: color .15s, background .15s;
+}
+.task-edit-clear:hover { color: var(--color-text); background: var(--color-surface-elev); }
+.task-edit-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 4px; }
+
 /* ===== Buttons ===== */
 .btn-primary {
   padding: 10px 22px; background: var(--accent-grad); color: #fff; border: none;
