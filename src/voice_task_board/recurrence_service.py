@@ -82,11 +82,13 @@ def materialize(task_id: int, gemini_backend=None) -> None:
         logger.warning(f"No occurrences generated for task {task_id}")
         return
 
-    # Idempotency: clear the previously-materialized UNDONE schedule before
-    # regenerating, so (re)materializing a rule doesn't stack a second window on
-    # top of the old one. Done occurrences (history) are kept; this also removes
-    # the boundary occurrence at exactly the start so it isn't duplicated.
-    stale_external_ids = db.delete_unfinished_occurrences(task_id)
+    # Idempotency: clear only the FUTURE undone schedule before regenerating, so
+    # (re)materializing doesn't stack a second window. Past occurrences and any
+    # completed ones are preserved as history — they must never be deleted and
+    # recreated (that would resurrect them with is_done=0). add_occurrences also
+    # skips dates that already exist, so existing future ones aren't duplicated.
+    now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+    stale_external_ids = db.delete_future_undone_occurrences(task_id, now_utc)
     if stale_external_ids and task.mirror_to_remote:
         from voice_task_board import remote_sync
         for ext_id in stale_external_ids:
@@ -96,8 +98,11 @@ def materialize(task_id: int, gemini_backend=None) -> None:
     db.add_occurrences(task_id, occurrences)
     logger.info(f"Materialized {len(occurrences)} occurrences for task {task_id}")
 
-    # Clear the parent's mirror_pending flag (avoid double-mirror after push_occurrences below)
-    db.set_external(task_id, task.external_provider, task.external_id, None, mirror_pending=False)
+    # Clear the parent's mirror_pending flag (avoid double-mirror after push_occurrences below).
+    # NOTE: use set_mirror_pending, NOT set_external — set_external force-sets
+    # mirror_to_remote=1, which would silently turn on mirroring for a task the
+    # user never asked to mirror.
+    db.set_mirror_pending(task_id, False)
 
     # Update parent task to point to the first occurrence
     db.update_task_due(

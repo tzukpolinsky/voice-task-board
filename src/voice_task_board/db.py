@@ -136,6 +136,25 @@ ALTER TABLE occurrences ADD COLUMN last_notified_date TEXT;
 DROP INDEX idx_occ_fired;
 CREATE INDEX idx_occ_done ON occurrences(is_done);
     """,
+    """
+-- Monotonic guard: occurrence is_done/fired may go 0 -> 1 but NEVER 1 -> 0.
+-- Enforced at the DB level so no code path can silently "revive" a completed or
+-- already-notified occurrence. If an UPDATE tries to lower a flag, we put it
+-- back, leaving any other columns in that same UPDATE intact.
+CREATE TRIGGER occ_is_done_monotonic
+AFTER UPDATE OF is_done ON occurrences
+FOR EACH ROW WHEN OLD.is_done = 1 AND NEW.is_done = 0
+BEGIN
+  UPDATE occurrences SET is_done = 1 WHERE id = NEW.id;
+END;
+
+CREATE TRIGGER occ_fired_monotonic
+AFTER UPDATE OF fired ON occurrences
+FOR EACH ROW WHEN OLD.fired = 1 AND NEW.fired = 0
+BEGIN
+  UPDATE occurrences SET fired = 1 WHERE id = NEW.id;
+END;
+    """,
 ]
 
 
@@ -157,12 +176,10 @@ class Database:
             for version in range(current_version + 1, len(MIGRATIONS)):
                 migration_sql = MIGRATIONS[version]
                 logger.info(f"Running migration {version}")
-                self._conn.execute("BEGIN")
                 try:
-                    for statement in migration_sql.split(";"):
-                        statement = statement.strip()
-                        if statement:
-                            cursor.execute(statement)
+                    # executescript handles multi-statement migrations including
+                    # triggers (whose bodies contain ';') as a single unit.
+                    self._conn.executescript(migration_sql)
                     cursor.execute(f"PRAGMA user_version = {version}")
                     self._conn.commit()
                 except Exception:
@@ -647,10 +664,19 @@ class Database:
 
     # Occurrence-related methods
     def add_occurrences(self, task_id: int, due_list: list[str]) -> None:
-        """Bulk insert occurrence rows."""
+        """Bulk insert occurrence rows, skipping any due date that already exists
+        for this task. This makes (re)materialization idempotent and — crucially —
+        never recreates an occurrence that was already completed/notified, which
+        would otherwise resurrect it with is_done=0/fired=0."""
         with self._lock:
             cursor = self._conn.cursor()
+            cursor.execute(
+                "SELECT due_at_utc FROM occurrences WHERE task_id = ?", (task_id,)
+            )
+            existing = {row[0] for row in cursor.fetchall()}
             for due_at_utc in due_list:
+                if due_at_utc in existing:
+                    continue
                 cursor.execute(
                     """INSERT INTO occurrences (task_id, due_at_utc, fired, is_done, mirror_pending)
                        VALUES (?, ?, 0, 0, 0)""",
@@ -759,6 +785,46 @@ class Database:
                     last_notified_date=row[8]
                 ))
             return result
+
+    def clear_occurrence_external_ids(self, task_id: int) -> list[str]:
+        """Return all non-null occurrence external_ids for a task and clear them
+        (set external_id=NULL, mirror_pending=0). Used when un-mirroring a
+        recurring task: the caller deletes the returned ids on Google."""
+        with self._lock:
+            cursor = self._conn.cursor()
+            cursor.execute(
+                "SELECT external_id FROM occurrences WHERE task_id = ? AND external_id IS NOT NULL",
+                (task_id,),
+            )
+            external_ids = [row[0] for row in cursor.fetchall()]
+            cursor.execute(
+                "UPDATE occurrences SET external_id = NULL, mirror_pending = 0 WHERE task_id = ?",
+                (task_id,),
+            )
+            self._conn.commit()
+            return external_ids
+
+    def delete_future_undone_occurrences(self, task_id: int, now_utc: str) -> list[str]:
+        """Delete only FUTURE, not-done occurrences (due_at_utc > now AND is_done=0),
+        returning their non-null external_ids. Used by (re)materialization: it clears
+        the upcoming schedule so it can be regenerated, while NEVER touching past
+        occurrences (history) or anything already completed — so a re-materialize
+        cannot resurrect a past/done occurrence."""
+        with self._lock:
+            cursor = self._conn.cursor()
+            cursor.execute(
+                """SELECT external_id FROM occurrences
+                   WHERE task_id = ? AND due_at_utc > ? AND is_done = 0
+                   AND external_id IS NOT NULL""",
+                (task_id, now_utc),
+            )
+            external_ids = [row[0] for row in cursor.fetchall()]
+            cursor.execute(
+                "DELETE FROM occurrences WHERE task_id = ? AND due_at_utc > ? AND is_done = 0",
+                (task_id, now_utc),
+            )
+            self._conn.commit()
+            return external_ids
 
     def delete_future_occurrences(self, task_id: int, after_utc: str) -> list[str]:
         """Delete occurrences with due_at_utc > after_utc, return list of deleted external_ids."""

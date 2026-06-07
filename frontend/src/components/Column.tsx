@@ -6,6 +6,7 @@ import { api } from '@/api'
 import { useToast } from '@/context/ToastContext'
 import { TaskCard } from './TaskCard'
 import { RecurringDoneCard } from './RecurringDoneCard'
+import { TaskEditModal } from './TaskEditModal'
 
 interface ColumnProps {
   categoryId: number
@@ -22,29 +23,10 @@ export const Column: React.FC<ColumnProps> = ({ categoryId, categoryName, tasks,
 
   const [hovered, setHovered] = useState(false)
   const [adding, setAdding] = useState(false)
-  const [newTitle, setNewTitle] = useState('')
   const [tab, setTab] = useState<'open' | 'done'>('open')
   const [archivedTasks, setArchivedTasks] = useState<ArchivedTask[]>([])
   const [showArchived, setShowArchived] = useState(false)
   const [loadingArchived, setLoadingArchived] = useState(false)
-
-  const handleCreate = async () => {
-    const t = newTitle.trim()
-    if (!t) {
-      setAdding(false)
-      setNewTitle('')
-      return
-    }
-    try {
-      await api.createTask(t, categoryId)
-      setNewTitle('')
-      setAdding(false)
-      onTasksChange()
-    } catch (e) {
-      console.error('Failed to create task', e)
-      toast.show(e instanceof Error ? e.message : 'Failed to create task')
-    }
-  }
 
   const handleShowArchived = async () => {
     if (showArchived) {
@@ -121,58 +103,34 @@ export const Column: React.FC<ColumnProps> = ({ categoryId, categoryName, tasks,
             ))}
           </div>
 
-          {adding ? (
-            <div style={{
-              background: 'var(--color-surface)',
-              border: `2px solid var(--color-accent)`,
+          <button
+            onClick={() => setAdding(true)}
+            title="Add task"
+            style={{
+              marginTop: 'auto',
+              paddingTop: 'var(--space-5)',
+              paddingBottom: 'var(--space-5)',
+              background: 'transparent',
+              border: '2px dashed var(--color-border-strong)',
               borderRadius: 'var(--radius-md)',
-              padding: 'var(--space-2)',
-              marginTop: 'var(--space-1)',
-            }}>
-              <input
-                autoFocus
-                type="text"
-                value={newTitle}
-                onChange={(e) => setNewTitle(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') handleCreate()
-                  if (e.key === 'Escape') { setAdding(false); setNewTitle('') }
-                }}
-                onBlur={handleCreate}
-                placeholder="New task..."
-                style={{
-                  width: '100%',
-                  padding: 'var(--space-1)',
-                  border: 'none',
-                  outline: 'none',
-                  fontSize: 'var(--text-md)',
-                  boxSizing: 'border-box',
-                }}
-              />
-            </div>
-          ) : (
-            <button
-              onClick={() => setAdding(true)}
-              title="Add task"
-              style={{
-                marginTop: 'auto',
-                paddingTop: 'var(--space-5)',
-                paddingBottom: 'var(--space-5)',
-                background: 'transparent',
-                border: '2px dashed var(--color-border-strong)',
-                borderRadius: 'var(--radius-md)',
-                color: 'var(--color-text-secondary)',
-                fontSize: 'var(--text-xl)',
-                cursor: 'pointer',
-                opacity: hovered ? 1 : 0,
-                transition: 'opacity 0.15s ease',
-                flex: 1,
-                minHeight: '60px',
-                lineHeight: 1,
-              }}
-            >
-              +
-            </button>
+              color: 'var(--color-text-secondary)',
+              fontSize: 'var(--text-xl)',
+              cursor: 'pointer',
+              opacity: hovered ? 1 : 0,
+              transition: 'opacity 0.15s ease',
+              flex: 1,
+              minHeight: '60px',
+              lineHeight: 1,
+            }}
+          >
+            +
+          </button>
+          {adding && (
+            <TaskEditModal
+              categoryId={categoryId}
+              onClose={() => setAdding(false)}
+              onSaved={onTasksChange}
+            />
           )}
         </>
       ) : (

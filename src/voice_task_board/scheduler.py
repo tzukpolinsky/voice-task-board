@@ -114,10 +114,14 @@ def _check_due_reminders() -> None:
 
             # Decide: if >=2 pending, show missed-summary (non-blocking); else show normal reminders
             if len(pending_occs) >= 2:
-                # Show a single summary toast with callback (non-blocking)
+                # Show a single summary toast with callback (non-blocking).
+                # Pass the missed occurrence dates so the toast says WHICH ones.
                 from voice_task_board import notifications
                 callback = lambda action, tid=task_id: _handle_missed_summary_action(tid, action)
-                notifications.show_missed_summary(task.title, len(pending_occs), callback=callback)
+                missed_dates = [o.due_at_utc for o in pending_occs]
+                notifications.show_missed_summary(
+                    task.title, len(pending_occs), due_list=missed_dates, callback=callback
+                )
             else:
                 # <=1 pending: show normal reminder for each
                 for occ in pending_occs:

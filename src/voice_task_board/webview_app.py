@@ -131,11 +131,28 @@ class Api:
             remote_sync.mirror_update(task_id)
 
     def set_mirror(self, task_id: int, mirror: bool) -> None:
-        """Toggle mirroring for an existing task."""
+        """Toggle mirroring for an existing task.
+
+        Recurring tasks mirror their OCCURRENCE SERIES (one Google task per
+        occurrence), not the parent as a single task — otherwise the phone would
+        show one undated item instead of the schedule.
+        """
         db = get_db()
         task = db.get_task(task_id)
         if not task:
             return
+
+        if task.is_recurrence:
+            if mirror:
+                db.set_mirror_toggle(task_id, True)
+                # Push every occurrence that isn't already on Google.
+                remote_sync.push_occurrences_for_task(task_id)
+            else:
+                remote_sync.delete_occurrences_for_task(task_id)
+                db.set_mirror_toggle(task_id, False)
+            return
+
+        # Non-recurring: mirror the task itself as one Google task.
         if mirror and not task.external_id:
             db.set_mirror_toggle(task_id, True)
             remote_sync.mirror_create(task_id)

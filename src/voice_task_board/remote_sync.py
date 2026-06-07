@@ -417,6 +417,23 @@ def _do_delete_occurrence_external(external_id: str) -> None:
         logger.warning(f"Failed to delete google occurrence {external_id}: {e}")
 
 
+def delete_occurrences_for_task(task_id: int) -> None:
+    """Delete every Google task for a recurring task's occurrences (un-mirror).
+    Clears the local external_ids first, then deletes each on Google. Background."""
+    threading.Thread(target=_do_delete_occurrences_for_task, args=(task_id,), daemon=True).start()
+
+
+def _do_delete_occurrences_for_task(task_id: int) -> None:
+    db = get_db()
+    external_ids = db.clear_occurrence_external_ids(task_id)
+    for ext_id in external_ids:
+        try:
+            _google_delete_occurrence(ext_id)
+            logger.info(f"Deleted google occurrence {ext_id} (un-mirror task {task_id})")
+        except Exception as e:
+            logger.warning(f"Failed to delete google occurrence {ext_id}: {e}")
+
+
 def push_occurrences_for_task(task_id: int, done_callback: callable | None = None) -> None:
     """Push all unpushed occurrences for a task. Background thread."""
     threading.Thread(target=_do_push_occurrences_for_task, args=(task_id, done_callback), daemon=True).start()
@@ -434,7 +451,8 @@ def _do_push_occurrences_for_task(task_id: int, done_callback: callable | None =
         
         unpushed = db.list_unpushed_occurrences(task_id)
         count = 0
-        
+        any_failed = False
+
         for occ in unpushed:
             try:
                 ext_id = _google_create_occurrence(task, occ.due_at_utc)
@@ -442,9 +460,16 @@ def _do_push_occurrences_for_task(task_id: int, done_callback: callable | None =
                 count += 1
                 logger.info(f"Pushed occurrence {occ.id} → google id={ext_id}")
             except Exception as e:
+                any_failed = True
                 logger.warning(f"Failed to push occurrence {occ.id}: {e}")
                 db.set_occurrence_external(occ.id, None, mirror_pending=1)
-    
+
+        # The parent task's mirror_pending tracks the SERIES sync. It was set to 1
+        # when mirroring was enabled; clear it once the occurrences are pushed so
+        # the card stops showing "sync pending". Keep it pending only if some
+        # occurrence failed (so it reflects real outstanding work).
+        db.set_mirror_pending(task_id, any_failed)
+
     if done_callback:
         done_callback()
 

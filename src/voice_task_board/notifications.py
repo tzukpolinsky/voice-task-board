@@ -4,6 +4,7 @@ import logging
 import os
 import sys
 import threading
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
@@ -307,9 +308,32 @@ def show_confirmation_toast(
     return result["action"]
 
 
-def show_missed_summary(task_title: str, count: int, callback: Callable[[str], None] | None = None) -> None:
+def _format_missed_dates(due_list: list[str], max_shown: int = 4) -> str:
+    """Compact human list of the missed occurrence dates, e.g.
+    'Thu Jun 4, Thu Jun 11, Thu Jun 18 +2 more'."""
+    labels: list[str] = []
+    for due in due_list:
+        try:
+            dt = datetime.fromisoformat(due)
+            labels.append(dt.strftime("%a %b ") + str(dt.day))
+        except Exception:
+            labels.append(due[:10])
+    if len(labels) > max_shown:
+        extra = len(labels) - max_shown
+        labels = labels[:max_shown] + [f"+{extra} more"]
+    return ", ".join(labels)
+
+
+def show_missed_summary(
+    task_title: str,
+    count: int,
+    due_list: list[str] | None = None,
+    callback: Callable[[str], None] | None = None,
+) -> None:
     """Show a summary toast for >=2 missed occurrences of one task.
 
+    `due_list` is the missed occurrence datetimes (ISO strings); their dates are
+    shown so the user knows WHICH reminders they missed, not just how many.
     Non-blocking. If callback is provided, calls it with action ('dismiss' or 'mark_done').
     """
     def _show_missed_summary_impl() -> None:
@@ -321,38 +345,58 @@ def show_missed_summary(task_title: str, count: int, callback: Callable[[str], N
                 callback("dismiss")
             return
 
-        event = threading.Event()
-        result: dict[str, str] = {"action": "dismiss"}
-
-        body = f"{count} reminders missed"
-        toast = Toast(text_fields=["Missed reminders", f"{task_title}: {body}"])
+        if due_list:
+            body = f"{task_title} — {count} missed: {_format_missed_dates(due_list)}"
+        else:
+            body = f"{task_title}: {count} reminders missed"
+        toast = Toast(text_fields=["Missed reminders", body])
         toast.duration = ToastDuration.Long
         toast.AddAction(ToastButton(content="Dismiss", arguments="dismiss"))
         toast.AddAction(ToastButton(content="Mark All Done", arguments="mark_done"))
 
+        # Event-driven: fire the callback exactly once, directly from whichever
+        # handler the OS invokes — NOT after a fixed timeout. A missed-reminders
+        # toast often sits in the Action Center and is clicked minutes later; a
+        # timeout-then-default model would resolve it as "dismiss" before the
+        # user ever clicks, losing their "Mark All Done" choice.
+        fired_once = threading.Event()
+
+        def _resolve(action: str) -> None:
+            if fired_once.is_set():
+                return
+            fired_once.set()
+            _release_toast(toast)
+            if callback:
+                callback(action)
+
         def _on_activated(e: Any) -> None:
-            result["action"] = (getattr(e, "arguments", "") or "dismiss")
-            event.set()
+            _resolve(getattr(e, "arguments", "") or "dismiss")
 
         def _on_dismissed(_: Any) -> None:
-            # Dismiss the toast without clicking → treat as dismiss action
-            if not event.is_set():
-                result["action"] = "dismiss"
-                event.set()
+            # Toast dismissed/expired without a button press → dismiss.
+            _resolve("dismiss")
+
+        def _on_failed(_e: Any) -> None:
+            _resolve("dismiss")
 
         toast.on_activated = _on_activated
         toast.on_dismissed = _on_dismissed
+        toast.on_failed = _on_failed
 
         _retain_toast(toast)
         try:
             toaster.show_toast(toast)
             logger.info(f"Showed missed-summary toast for task {task_title}: {count} occurrences")
-            event.wait(timeout=10)
+            # Keep this thread alive so WinRT can deliver the button-click event
+            # (same requirement as show_reminder). The callback is fired by the
+            # handlers, NOT by the timeout — the long cap only prevents leaking
+            # the thread if the toast is never touched at all. 1 hour is plenty
+            # for the user to act from the Action Center.
+            fired_once.wait(timeout=3600)
+            if not fired_once.is_set():
+                _resolve("dismiss")  # never touched within the cap
         except Exception as e:
             logger.warning(f"Could not show missed-summary toast: {e}")
-        finally:
-            _release_toast(toast)
-            if callback:
-                callback(result.get("action", "dismiss"))
+            _resolve("dismiss")
 
     threading.Thread(target=_show_missed_summary_impl, daemon=True).start()

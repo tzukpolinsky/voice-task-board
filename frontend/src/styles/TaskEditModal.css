@@ -1,0 +1,83 @@
+/* Task create/edit modal — reuses .settings-overlay for the dim/blur backdrop,
+   but is wider and roomier than the settings panel so the form breathes. */
+
+.task-modal {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-xl);
+  padding: 24px 28px;
+  width: 600px;
+  max-width: 90vw;
+  max-height: 85vh;
+  overflow-y: auto;
+  box-shadow: var(--shadow-lg);
+  animation: panel-in 0.24s var(--ease);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.task-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.task-modal-title {
+  font-family: var(--font-display);
+  font-size: 18px;
+  font-weight: 700;
+  margin: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.task-modal-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.task-modal-close:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--color-text);
+}
+
+/* Side-by-side field rows that use the extra width. */
+.task-modal-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.task-modal-row .task-edit-label {
+  min-width: 52px;
+}
+.task-modal-row .task-edit-input--inline {
+  flex: 1;
+  min-width: 160px;
+}
+
+/* The repeats row hosts a dropdown that must be able to open without being
+   clipped by the modal's scroll area. */
+.task-modal-row--repeats {
+  position: relative;
+  z-index: 1;
+}
+
+.task-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 8px;
+}

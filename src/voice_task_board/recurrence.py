@@ -1,8 +1,27 @@
 """Recurrence engine using dateutil.rrule for deterministic date math."""
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from dateutil import rrule
 from zoneinfo import ZoneInfo
+
+
+def _parse_until(until_utc: str | None, tz: str | None) -> datetime | None:
+    """Parse an `until` bound. A DATE-only value ("2027-12-04") means the whole
+    day is included, so we treat it as end-of-day (23:59:59) — otherwise an
+    occurrence later that day (e.g. 16:00) would be wrongly excluded by a
+    midnight comparison, truncating long bounded recurrences a day early."""
+    if not until_utc:
+        return None
+    dt = datetime.fromisoformat(until_utc)
+    # Date-only (no time component) → extend to end of that day.
+    if "T" not in until_utc and dt.hour == 0 and dt.minute == 0 and dt.second == 0:
+        dt = dt.replace(hour=23, minute=59, second=59)
+    if tz:
+        try:
+            dt = dt.replace(tzinfo=ZoneInfo(tz))
+        except Exception:
+            pass
+    return dt
 
 
 def generate_occurrences(
@@ -37,19 +56,10 @@ def generate_occurrences(
             # If tz is invalid, treat as naive/local
             pass
     
-    # Parse the until datetime if provided
-    until_dt = None
-    if until_utc:
-        until_dt = datetime.fromisoformat(until_utc)
-        if tz:
-            try:
-                zone = ZoneInfo(tz)
-                until_dt = until_dt.replace(tzinfo=zone)
-            except Exception:
-                pass
-    
+    # Parse the until datetime if provided (date-only → end of day)
+    until_dt = _parse_until(until_utc, tz)
+
     # Calculate the horizon window end
-    from datetime import timedelta
     horizon_end = start_dt + timedelta(days=horizon_days)
     
     # Determine the actual end: minimum of horizon and until
@@ -96,7 +106,7 @@ def next_after(
         The next occurrence datetime string, or None if past until or no future match.
     """
     after_dt = datetime.fromisoformat(after_utc)
-    
+
     # Apply timezone if provided
     if tz:
         try:
@@ -104,34 +114,24 @@ def next_after(
             after_dt = after_dt.replace(tzinfo=zone)
         except Exception:
             pass
-    
-    # Parse until if provided
-    until_dt = None
-    if until_utc:
-        until_dt = datetime.fromisoformat(until_utc)
-        if tz:
-            try:
-                zone = ZoneInfo(tz)
-                until_dt = until_dt.replace(tzinfo=zone)
-            except Exception:
-                pass
-    
-    # Use a far-future horizon for next_after
-    from datetime import timedelta
-    horizon_end = after_dt + timedelta(days=400)  # Look ahead a bit further
-    
+
+    # Parse until if provided (date-only → end of day, same rule as generation)
+    until_dt = _parse_until(until_utc, tz)
+
     try:
+        # dtstart=after_dt keeps the wall-clock time-of-day; for the rules this
+        # app produces (daily / weekly-by-day / monthly / yearly) the cadence is
+        # anchored by FREQ/BYDAY, so phase is preserved. `.after()` returns the
+        # single next occurrence with no fixed horizon, so long bounded series
+        # (e.g. >1 year) are never truncated by a too-small look-ahead window.
         rule = rrule.rrulestr(rrule_str, dtstart=after_dt)
-        # Get all occurrences strictly after after_dt
-        candidates = list(rule.between(after_dt, horizon_end, inc=False))
+        next_dt = rule.after(after_dt, inc=False)
     except Exception:
         return None
-    
-    if not candidates:
+
+    if next_dt is None:
         return None
-    
-    next_dt = candidates[0]
-    
+
     # Check if past until
     if until_dt and next_dt > until_dt:
         return None

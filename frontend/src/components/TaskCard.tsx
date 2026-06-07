@@ -1,13 +1,13 @@
 import React, { useState } from 'react'
 import { useDraggable } from '@dnd-kit/core'
 import { CSS } from '@dnd-kit/utilities'
-import { Pencil, Check, Cloud, CloudOff, Trash2, X, Clock, Repeat, AlertTriangle, Loader } from 'lucide-react'
+import { Pencil, Check, Cloud, CloudOff, Trash2, Clock, Repeat, AlertTriangle, Loader } from 'lucide-react'
 import type { Task } from '@/types/domain'
 import { api } from '@/api'
 import { useToast } from '@/context/ToastContext'
-import { formatDue, toLocalInput, isDueSoon, isOverdue } from './TaskCard.helpers'
-import { RecurrenceSelect } from './RecurrenceSelect'
+import { formatDue, isDueSoon, isOverdue } from './TaskCard.helpers'
 import { RecurringCompleteButton } from './RecurringCompleteButton'
+import { TaskEditModal } from './TaskEditModal'
 
 interface TaskCardProps {
   task: Task
@@ -27,13 +27,6 @@ export const TaskCard: React.FC<TaskCardProps> = ({ task, onChanged }) => {
   })
 
   const [editing, setEditing] = useState(false)
-  const [title, setTitle] = useState(task.title)
-  const [description, setDescription] = useState(task.description ?? '')
-  const [dueInput, setDueInput] = useState('')
-  const [isFullDayEdit, setIsFullDayEdit] = useState(false)
-  const [leadTimeEdit, setLeadTimeEdit] = useState(30)
-  const [recurrenceEdit, setRecurrenceEdit] = useState<string | null>(null)
-  const [untilEdit, setUntilEdit] = useState<string | null>(null)
   const [togglingMirror, setTogglingMirror] = useState(false)
 
   const style = {
@@ -52,17 +45,6 @@ export const TaskCard: React.FC<TaskCardProps> = ({ task, onChanged }) => {
     : dueSoon
     ? 'var(--color-warning)'
     : 'var(--color-border-strong)'
-
-  const openEdit = () => {
-    setTitle(task.title)
-    setDescription(task.description ?? '')
-    setDueInput(toLocalInput(task))
-    setIsFullDayEdit(task.is_full_day)
-    setLeadTimeEdit(task.lead_time_minutes)
-    setRecurrenceEdit(task.recurrence_rule ?? null)
-    setUntilEdit(task.recurrence_until ? task.recurrence_until.slice(0, 10) : null)
-    setEditing(true)
-  }
 
   const handleDelete = async () => {
     try {
@@ -84,52 +66,6 @@ export const TaskCard: React.FC<TaskCardProps> = ({ task, onChanged }) => {
     }
   }
 
-  const handleSave = async () => {
-    const t = title.trim()
-    if (!t) {
-      handleCancel()
-      return
-    }
-    try {
-      await api.updateTask(task.id, t, description)
-
-      let dueAtUtc: string | null = null
-      let dueTz: string | null = null
-      if (dueInput) {
-        const d = new Date(dueInput) // browser parses datetime-local as local time
-        dueAtUtc = d.toISOString().slice(0, 19)
-        dueTz = Intl.DateTimeFormat().resolvedOptions().timeZone
-      }
-      // Save due/lead/full-day. Recurrence is handled by setRecurrence() below
-      // (not here) so the AI text→RRULE conversion, the UNTIL date, and
-      // occurrence (re)materialization all happen in one place.
-      await api.updateTaskDue(
-        task.id,
-        dueAtUtc,
-        dueTz,
-        isFullDayEdit,
-        leadTimeEdit,
-        null,
-      )
-
-      // Single source of truth for recurrence: handles text→RRULE, the UNTIL
-      // date, and (re)materialization. Passing null clears any existing rule.
-      await api.setRecurrence(task.id, recurrenceEdit, untilEdit)
-
-      setEditing(false)
-      onChanged()
-    } catch (e) {
-      console.error('Failed to update task', e)
-      toast.show(e instanceof Error ? e.message : 'Failed to update task')
-    }
-  }
-
-  const handleCancel = () => {
-    setTitle(task.title)
-    setDescription(task.description ?? '')
-    setEditing(false)
-  }
-
   const handleToggleMirror = async () => {
     setTogglingMirror(true)
     try {
@@ -146,114 +82,30 @@ export const TaskCard: React.FC<TaskCardProps> = ({ task, onChanged }) => {
   const stateClass = task.has_drift || overdue ? 'priority-high' : dueSoon ? 'priority-due' : ''
 
   return (
-    <div
-      className={`task-card ${stateClass}`}
-      ref={setNodeRef}
-      style={{
-        ...style,
-        background: 'var(--color-surface)',
-        border: `1px solid ${borderColor}`,
-        borderRadius: 'var(--radius-md)',
-        padding: 'var(--space-3)',
-        marginBottom: 'var(--space-2)',
-        boxShadow: isDragging ? 'var(--shadow-card-drag)' : 'var(--shadow-card)',
-        cursor: editing ? 'default' : 'grab',
-      }}
-      {...(editing ? {} : attributes)}
-      {...(editing ? {} : listeners)}
-    >
-      {editing ? (
-        <div className="task-edit" {...stopDrag}>
-          <input
-            autoFocus
-            type="text"
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            onKeyDown={(e) => {
-              e.stopPropagation()
-              if (e.key === 'Enter' && !e.shiftKey) handleSave()
-              if (e.key === 'Escape') handleCancel()
-            }}
-            className="task-edit-input task-edit-input--title"
-          />
-          <textarea
-            value={description}
-            onChange={(e) => setDescription(e.target.value)}
-            onKeyDown={(e) => e.stopPropagation()}
-            placeholder="Description (optional)"
-            rows={4}
-            className="task-edit-input task-edit-input--area"
-          />
-
-          {/* Due date row */}
-          <div className="task-edit-row">
-            <label className="task-edit-label">Due:</label>
-            <input
-              type={isFullDayEdit ? 'date' : 'datetime-local'}
-              value={dueInput}
-              onChange={(e) => setDueInput(e.target.value)}
-              className="task-edit-input task-edit-input--inline"
-            />
-            <label className="task-edit-check">
-              <input
-                type="checkbox"
-                checked={isFullDayEdit}
-                onChange={(e) => {
-                  setIsFullDayEdit(e.target.checked)
-                  // keep date portion when toggling
-                  if (dueInput.length >= 10) setDueInput(dueInput.slice(0, 10))
-                }}
-              />
-              All day
-            </label>
-            {dueInput && (
-              <button
-                onClick={() => setDueInput('')}
-                title="Clear due date"
-                className="task-edit-clear"
-              >
-                <X size={12} />
-              </button>
-            )}
-          </div>
-
-          {/* Lead time — only when due date is set */}
-          {dueInput && (
-            <div className="task-edit-row">
-              <label className="task-edit-label">Remind:</label>
-              <select
-                value={leadTimeEdit}
-                onChange={(e) => setLeadTimeEdit(Number(e.target.value))}
-                className="task-edit-input task-edit-input--inline"
-              >
-                <option value={10}>10 min before</option>
-                <option value={15}>15 min before</option>
-                <option value={30}>30 min before</option>
-                <option value={60}>1 hour before</option>
-                <option value={120}>2 hours before</option>
-                <option value={1440}>1 day before</option>
-              </select>
-            </div>
-          )}
-
-          {/* Recurrence */}
-          <div className="task-edit-row" {...stopDrag}>
-            <RecurrenceSelect
-              value={recurrenceEdit}
-              until={untilEdit}
-              onChange={(repeat, until) => {
-                setRecurrenceEdit(repeat)
-                setUntilEdit(until)
-              }}
-            />
-          </div>
-
-          <div className="task-edit-actions">
-            <button onClick={handleCancel} className="btn-secondary">Cancel</button>
-            <button onClick={handleSave} className="btn-primary">Save</button>
-          </div>
-        </div>
-      ) : (
+    <>
+      {editing && (
+        <TaskEditModal
+          task={task}
+          onClose={() => setEditing(false)}
+          onSaved={onChanged}
+        />
+      )}
+      <div
+        className={`task-card ${stateClass}`}
+        ref={setNodeRef}
+        style={{
+          ...style,
+          background: 'var(--color-surface)',
+          border: `1px solid ${borderColor}`,
+          borderRadius: 'var(--radius-md)',
+          padding: 'var(--space-3)',
+          marginBottom: 'var(--space-2)',
+          boxShadow: isDragging ? 'var(--shadow-card-drag)' : 'var(--shadow-card)',
+          cursor: 'grab',
+        }}
+        {...attributes}
+        {...listeners}
+      >
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', gap: '8px' }}>
           <div style={{ flex: 1, minWidth: 0 }}>
             <p className="task-card-title">{task.title}</p>
@@ -271,19 +123,27 @@ export const TaskCard: React.FC<TaskCardProps> = ({ task, onChanged }) => {
             )}
 
             {/* Recurrence caption — always visible on recurring cards.
-                Only mention Google when the task is actually mirrored. */}
-            {task.recurrence_rule && (
-              <p style={{ fontSize: '10px', color: 'var(--color-text-faint)', marginBottom: '4px', fontStyle: 'italic', display: 'flex', alignItems: 'flex-start', gap: '4px', lineHeight: 1.4 }}>
-                <Repeat size={11} style={{ flexShrink: 0, marginTop: '1px' }} />
-                <span>
-                  {task.recurrence_until
-                    ? `Repeats until ${new Date(task.recurrence_until.slice(0, 10) + 'T00:00:00').toLocaleDateString()}`
-                    : task.mirror_to_remote
-                    ? 'Synced to Google ~1 year ahead. Repeats beyond a year won’t appear on your phone until then.'
-                    : 'Repeats indefinitely (occurrences scheduled ~1 year ahead).'}
-                </span>
-              </p>
-            )}
+                The "~1 year ahead" warning only shows when there is MORE than a
+                year of recurrence left (no end date, or an end date >1y away),
+                since that's the only case where the 1-year horizon matters. */}
+            {task.recurrence_rule && (() => {
+              const ONE_YEAR_MS = 365 * 24 * 60 * 60 * 1000
+              const untilDate = task.recurrence_until
+                ? new Date(task.recurrence_until.slice(0, 10) + 'T00:00:00')
+                : null
+              const moreThanAYearLeft = !untilDate || untilDate.getTime() - Date.now() > ONE_YEAR_MS
+              return (
+                <p style={{ fontSize: '10px', color: 'var(--color-text-faint)', marginBottom: '4px', fontStyle: 'italic', display: 'flex', alignItems: 'flex-start', gap: '4px', lineHeight: 1.4 }}>
+                  <Repeat size={11} style={{ flexShrink: 0, marginTop: '1px' }} />
+                  <span>
+                    {untilDate && `Repeats until ${untilDate.toLocaleDateString()}. `}
+                    {moreThanAYearLeft && (task.mirror_to_remote
+                      ? 'Synced to Google ~1 year ahead. Repeats beyond a year won’t appear on your phone until then.'
+                      : 'Occurrences are scheduled ~1 year ahead.')}
+                  </span>
+                </p>
+              )
+            })()}
 
             {/* Status badges */}
             <div className="task-card-tags" style={{ display: 'flex', gap: '4px', flexWrap: 'wrap', marginTop: '2px' }}>
@@ -311,7 +171,7 @@ export const TaskCard: React.FC<TaskCardProps> = ({ task, onChanged }) => {
           </div>
 
           <div className="task-card-actions" style={{ display: 'flex', flexDirection: 'column', gap: '4px', flexShrink: 0 }} {...stopDrag}>
-            <button className="task-card-action task-card-action--primary" onClick={openEdit} title="Edit"><Pencil size={14} /></button>
+            <button className="task-card-action task-card-action--primary" onClick={() => setEditing(true)} title="Edit"><Pencil size={14} /></button>
             {task.recurrence_rule ? (
               <RecurringCompleteButton task={task} onChanged={onChanged} />
             ) : (
@@ -328,7 +188,7 @@ export const TaskCard: React.FC<TaskCardProps> = ({ task, onChanged }) => {
             <button className="task-card-action task-card-action--danger" onClick={handleDelete} title="Delete"><Trash2 size={14} /></button>
           </div>
         </div>
-      )}
-    </div>
+      </div>
+    </>
   )
 }
