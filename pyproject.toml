@@ -21,10 +21,12 @@ dependencies = [
   "pycaw>=20240210",
   "comtypes>=1.2",
   "python-dateutil>=2.8.2",
+  "scipy>=1.11",
+  "soxr>=0.3",
 ]
 
 [project.optional-dependencies]
-dev = ["mypy", "ruff", "pyinstaller>=6.5"]
+dev = ["mypy", "ruff", "pyinstaller>=6.5", "pytest>=8", "jiwer>=3", "soundfile>=0.12"]
 
 [tool.setuptools]
 package-dir = {"" = "src"}
@@ -41,3 +43,7 @@ warn_unused_configs = true
 [[tool.mypy.overrides]]
 module = ["win32api", "win32con", "win32gui", "pystray", "sounddevice", "pycaw", "pycaw.pycaw", "comtypes", "comtypes.client", "windows_toasts"]
 ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["live: tests that call the real Gemini API (skipped without a key)"]
