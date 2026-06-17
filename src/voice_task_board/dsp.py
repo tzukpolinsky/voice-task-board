@@ -44,3 +44,14 @@ def soft_limit(pcm: np.ndarray, ceiling: float = 0.999) -> np.ndarray:
     # scaling is `ceiling * tanh(pcm)` and NOT `tanh(pcm)*ceiling/tanh(1)` — the
     # latter overshoots the ceiling for inputs >1.0.
     return (ceiling * np.tanh(pcm)).astype(np.float32)
+
+
+def preprocess(pcm: np.ndarray, src_rate: int) -> np.ndarray:
+    from voice_task_board.audio import _downmix_to_mono
+    pcm = np.asarray(pcm, dtype=np.float32)
+    if pcm.size == 0:
+        return pcm.reshape(-1)
+    mono = _downmix_to_mono(pcm)
+    mono = normalize_peak(mono)
+    mono = resample(mono, src_rate, DST_RATE)
+    return soft_limit(mono)

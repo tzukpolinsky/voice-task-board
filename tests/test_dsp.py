@@ -71,3 +71,17 @@ def test_soft_limit_lower_distortion_than_hard_clip():
     soft = dsp.soft_limit(hot, ceiling=0.999)
     hard = np.clip(hot, -0.999, 0.999)
     assert _thd(soft, 16000, 440) < _thd(hard, 16000, 440)
+
+
+def test_preprocess_outputs_16k_mono_float32():
+    stereo = np.stack([_tone(440, 48000), _tone(660, 48000)], axis=1).astype(np.float32)
+    out = dsp.preprocess(stereo, 48000)
+    assert out.dtype == np.float32 and out.ndim == 1
+    assert np.all(np.isfinite(out))
+    assert float(np.max(np.abs(out))) <= 0.999 + 1e-6
+    # ~1/3 the samples after 48k→16k
+    assert abs(out.size - stereo.shape[0] / 3) < 50
+
+
+def test_preprocess_empty():
+    assert dsp.preprocess(np.zeros(0, np.float32), 48000).size == 0
