@@ -1,0 +1,35 @@
+import numpy as np
+from voice_task_board import dsp
+
+
+def _tone(freq_hz, rate, seconds=0.5):
+    t = np.arange(int(rate * seconds)) / rate
+    return np.sin(2 * np.pi * freq_hz * t).astype(np.float32)
+
+
+def _peak_freq(pcm, rate):
+    spec = np.abs(np.fft.rfft(pcm))
+    return np.fft.rfftfreq(len(pcm), 1 / rate)[int(np.argmax(spec))]
+
+
+def test_resample_preserves_in_band_tone():
+    out = dsp.resample(_tone(1000, 48000), 48000, 16000)
+    assert abs(_peak_freq(out, 16000) - 1000) < 30
+
+
+def test_resample_rejects_out_of_band_alias():
+    # 7 kHz exists at 48k but is above the 8 kHz Nyquist of 16k; a proper
+    # resampler attenuates it instead of aliasing it back into the speech band.
+    out = dsp.resample(_tone(7000, 48000), 48000, 16000)
+    in_band = np.abs(np.fft.rfft(out))[ (np.fft.rfftfreq(len(out), 1/16000) < 4000) ]
+    assert float(np.max(in_band)) < 0.1 * len(out)
+
+
+def test_resample_noop_same_rate():
+    x = _tone(1000, 16000)
+    out = dsp.resample(x, 16000, 16000)
+    assert np.allclose(out, x)
+
+
+def test_resample_empty():
+    assert dsp.resample(np.zeros(0, np.float32), 48000, 16000).size == 0
