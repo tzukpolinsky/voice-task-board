@@ -14,10 +14,6 @@ from typing import Any, Callable, Iterator
 logger = logging.getLogger(__name__)
 
 _SAMPLE_RATE = 16000
-# When True, capture uses the higher-quality dsp.preprocess chain; when False,
-# the legacy downmix→linear-interp→hard-clip path. The accuracy suite flips this
-# to A/B the two on identical input.
-USE_DSP_PREPROCESS = True
 _MAX_RECORDING_SECONDS = 30
 _DEVICE_CACHE_FILE = Path.home() / ".cache" / "voice_task_board" / "audio_device.json"
 
@@ -355,6 +351,41 @@ def _downmix_to_mono(pcm: np.ndarray) -> np.ndarray:
     return pcm.mean(axis=1)
 
 
+def _trim_silence(pcm: np.ndarray, rate: int, threshold_dbfs: float = -40.0,
+                  pad_ms: int = 100) -> np.ndarray:
+    """Trim leading/trailing silence from mono float32 audio.
+
+    Gemini bills audio by DURATION (~25-32 tokens/sec), independent of sample
+    rate or bytes, so trimming the dead air at the start/end of a push-to-talk
+    recording directly cuts API cost. Conservative by design: it only cuts the
+    outer silence, never interior pauses, and keeps a small pad before/after the
+    speech so onsets/tails aren't clipped (clipping speech would hurt accuracy).
+    Returns the input unchanged if it's empty or entirely below threshold.
+    """
+    if pcm.size == 0:
+        return pcm
+    # Frame-energy gate. Compare each ~20ms frame's peak to a threshold relative
+    # to the clip's own peak (so it adapts to quiet vs loud recordings).
+    peak = float(np.max(np.abs(pcm)))
+    if peak <= 0.0:
+        return pcm
+    thresh = peak * (10 ** (threshold_dbfs / 20))
+    frame = max(1, int(rate * 0.02))
+    n_frames = pcm.size // frame
+    if n_frames == 0:
+        return pcm
+    framed = pcm[: n_frames * frame].reshape(n_frames, frame)
+    loud = np.max(np.abs(framed), axis=1) > thresh
+    if not loud.any():
+        return pcm  # nothing above threshold — leave it alone
+    first = int(np.argmax(loud))
+    last = n_frames - 1 - int(np.argmax(loud[::-1]))
+    pad = int(rate * pad_ms / 1000)
+    start = max(0, first * frame - pad)
+    end = min(pcm.size, (last + 1) * frame + pad)
+    return pcm[start:end]
+
+
 def _resample_float32(pcm: np.ndarray, src_rate: int, dst_rate: int = _SAMPLE_RATE) -> np.ndarray:
     if src_rate == dst_rate or pcm.size == 0:
         return pcm.astype(np.float32, copy=False)
@@ -428,13 +459,14 @@ def record_while_held(is_held: Callable[[], bool], poll_interval: float = 0.03) 
         else:
             captured = np.zeros((0, actual_channels), dtype=np.float32)
 
-    if USE_DSP_PREPROCESS:
-        from voice_task_board import dsp
-        processed = dsp.preprocess(captured, actual_rate)
-    else:
-        mono = _downmix_to_mono(captured)
-        processed = _resample_float32(mono, actual_rate, _SAMPLE_RATE)
-    pcm_int16 = _float32_to_int16(processed)
+    # No DSP enhancement: modern ASR transcribes raw audio best (Google/Deepgram
+    # both advise against pre-send gain/denoise). We only downmix + resample to
+    # 16 kHz, then trim leading/trailing silence — the one transform that cuts
+    # cost, since Gemini bills audio by duration.
+    mono = _downmix_to_mono(captured)
+    resampled = _resample_float32(mono, actual_rate, _SAMPLE_RATE)
+    trimmed = _trim_silence(resampled, _SAMPLE_RATE)
+    pcm_int16 = _float32_to_int16(trimmed)
     pcm_data = pcm_int16.tobytes()
     logger.info(
         f"Push-to-talk recording stopped. Captured {captured.shape[0]} samples @ "
