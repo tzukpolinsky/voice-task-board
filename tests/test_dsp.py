@@ -33,3 +33,19 @@ def test_resample_noop_same_rate():
 
 def test_resample_empty():
     assert dsp.resample(np.zeros(0, np.float32), 48000, 16000).size == 0
+
+
+def test_normalize_peak_hits_target():
+    quiet = (_tone(440, 16000) * 0.05).astype(np.float32)
+    out = dsp.normalize_peak(quiet, target_dbfs=-1.0)
+    expected_peak = 10 ** (-1.0 / 20)
+    assert abs(float(np.max(np.abs(out))) - expected_peak) < 1e-3
+
+
+def test_normalize_peak_silence_safe():
+    out = dsp.normalize_peak(np.zeros(1000, np.float32))
+    assert np.all(np.isfinite(out)) and float(np.max(np.abs(out))) == 0.0
+
+
+def test_normalize_peak_empty():
+    assert dsp.normalize_peak(np.zeros(0, np.float32)).size == 0

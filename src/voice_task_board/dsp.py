@@ -22,3 +22,14 @@ def resample(pcm: np.ndarray, src_rate: int, dst_rate: int = DST_RATE) -> np.nda
         g = gcd(int(src_rate), int(dst_rate))
         up, down = dst_rate // g, src_rate // g
         return resample_poly(pcm, up, down).astype(np.float32)
+
+
+def normalize_peak(pcm: np.ndarray, target_dbfs: float = -1.0) -> np.ndarray:
+    pcm = np.asarray(pcm, dtype=np.float32)
+    if pcm.size == 0:
+        return pcm
+    peak = float(np.max(np.abs(pcm)))
+    if peak <= 0.0:
+        return pcm
+    target = 10 ** (target_dbfs / 20)
+    return (pcm * (target / peak)).astype(np.float32)
