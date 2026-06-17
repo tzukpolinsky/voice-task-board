@@ -1,7 +1,4 @@
 # -*- mode: python ; coding: utf-8 -*-
-from PyInstaller.utils.hooks import collect_submodules
-_extra_hidden = collect_submodules("scipy.signal") + ["soxr"]
-
 a = Analysis(
     ['src/voice_task_board/__main__.py'],
     pathex=[],
@@ -21,7 +18,6 @@ a = Analysis(
         'winrt.windows.ui.notifications',
         'winrt.windows.data.xml.dom',
         'winrt.windows.foundation',
-        *_extra_hidden,
     ],
     hookspath=[],
     hooksconfig={},

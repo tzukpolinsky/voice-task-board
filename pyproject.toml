@@ -21,12 +21,10 @@ dependencies = [
   "pycaw>=20240210",
   "comtypes>=1.2",
   "python-dateutil>=2.8.2",
-  "scipy>=1.11",
-  "soxr>=0.3",
 ]
 
 [project.optional-dependencies]
-dev = ["mypy", "ruff", "pyinstaller>=6.5", "pytest>=8", "jiwer>=3", "soundfile>=0.12"]
+dev = ["mypy", "ruff", "pyinstaller>=6.5", "pytest>=8"]
 
 [tool.setuptools]
 package-dir = {"" = "src"}
@@ -46,4 +44,3 @@ ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-markers = ["live: tests that call the real Gemini API (skipped without a key)"]
