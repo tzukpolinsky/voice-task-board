@@ -3,7 +3,6 @@ import re
 import unicodedata
 from pathlib import Path
 
-import numpy as np
 import pytest
 import soundfile as sf
 from jiwer import wer
@@ -39,8 +38,11 @@ def _processed_int16(pcm, rate):
 
 @pytest.mark.live
 def test_processed_not_worse_than_baseline(gemini_backend):
+    clips = list(_load_clips())
+    if not clips:
+        pytest.skip("no clips in manifest")
     rows, base_wers, proc_wers = [], [], []
-    for name, pcm, rate, truth in _load_clips():
+    for name, pcm, rate, truth in clips:
         ref = _normalize(truth)
         b = _normalize(gemini_backend.extract_intent(_baseline_int16(pcm, rate), CATEGORIES).transcription)
         p = _normalize(gemini_backend.extract_intent(_processed_int16(pcm, rate), CATEGORIES).transcription)
