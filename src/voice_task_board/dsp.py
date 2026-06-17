@@ -33,3 +33,14 @@ def normalize_peak(pcm: np.ndarray, target_dbfs: float = -1.0) -> np.ndarray:
         return pcm
     target = 10 ** (target_dbfs / 20)
     return (pcm * (target / peak)).astype(np.float32)
+
+
+def soft_limit(pcm: np.ndarray, ceiling: float = 0.999) -> np.ndarray:
+    pcm = np.asarray(pcm, dtype=np.float32)
+    if pcm.size == 0:
+        return pcm
+    # tanh soft knee: ~linear for small signals (tanh(x)≈x), and since tanh
+    # asymptotes to ±1 the output magnitude is always < ceiling. This is why the
+    # scaling is `ceiling * tanh(pcm)` and NOT `tanh(pcm)*ceiling/tanh(1)` — the
+    # latter overshoots the ceiling for inputs >1.0.
+    return (ceiling * np.tanh(pcm)).astype(np.float32)

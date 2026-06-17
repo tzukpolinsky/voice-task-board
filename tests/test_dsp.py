@@ -49,3 +49,25 @@ def test_normalize_peak_silence_safe():
 
 def test_normalize_peak_empty():
     assert dsp.normalize_peak(np.zeros(0, np.float32)).size == 0
+
+
+def _thd(pcm, rate, fundamental):
+    spec = np.abs(np.fft.rfft(pcm))
+    freqs = np.fft.rfftfreq(len(pcm), 1 / rate)
+    fund_bin = int(np.argmin(np.abs(freqs - fundamental)))
+    fund = spec[fund_bin]
+    harmonics = spec.sum() - fund
+    return harmonics / (fund + 1e-9)
+
+
+def test_soft_limit_respects_ceiling():
+    hot = (_tone(440, 16000) * 1.5).astype(np.float32)
+    out = dsp.soft_limit(hot, ceiling=0.999)
+    assert float(np.max(np.abs(out))) <= 0.999 + 1e-6
+
+
+def test_soft_limit_lower_distortion_than_hard_clip():
+    hot = (_tone(440, 16000) * 1.5).astype(np.float32)
+    soft = dsp.soft_limit(hot, ceiling=0.999)
+    hard = np.clip(hot, -0.999, 0.999)
+    assert _thd(soft, 16000, 440) < _thd(hard, 16000, 440)
