@@ -17,7 +17,29 @@ from voice_task_board.prompts import load_prompt
 logger = logging.getLogger(__name__)
 
 
+# Direct page where a user enables billing / upgrades a key to the paid tier.
+BILLING_URL = "https://aistudio.google.com/apikey"
+
+
+class BillingError(Exception):
+    """Raised when a Gemini request fails for billing/quota reasons (HTTP 429,
+    or 503 with a quota/billing signal). Carries a user-facing message and the
+    direct link to enable billing, so the UI can show an actionable toast rather
+    than a raw HTTP error."""
+
+    def __init__(self, message: str, url: str = BILLING_URL) -> None:
+        super().__init__(message)
+        self.user_message = message
+        self.url = url
+
+
 class GeminiBackend:
+    # Preferred model: chosen for transcription quality and confirmed serviceable.
+    # We try this first (validated against the key's available list) before falling
+    # back to version-based auto-pick, then to a hard default. NOTE: gemini-3.5-flash
+    # 503s on free-tier keys (capacity-gated); it serves once billing is enabled.
+    _DEFAULT_MODEL = "gemini-3.5-flash"
+
     _model: str | None = None
     _endpoint: str | None = None
 
@@ -42,16 +64,21 @@ class GeminiBackend:
             
             model_ids = [m.get("name", "").split("/")[-1] for m in models]
             logger.info(f"Available models: {model_ids}")
-            
-            GeminiBackend._model = self._pick_best_model(model_ids)
+
+            # Prefer the pinned default when the key actually offers it; otherwise
+            # fall back to version-based auto-pick, then to a hard default.
+            if GeminiBackend._DEFAULT_MODEL in model_ids:
+                GeminiBackend._model = GeminiBackend._DEFAULT_MODEL
+            else:
+                GeminiBackend._model = self._pick_best_model(model_ids)
             if not GeminiBackend._model:
-                GeminiBackend._model = "gemini-2.0-flash"
+                GeminiBackend._model = "gemini-3.5-flash"
             
             GeminiBackend._endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{GeminiBackend._model}:generateContent"
             logger.info(f"Using model: {GeminiBackend._model}")
         except Exception as e:
             logger.warning(f"Failed to verify model, using default: {e}")
-            GeminiBackend._model = "gemini-2.0-flash"
+            GeminiBackend._model = "gemini-3-flash-preview"
             GeminiBackend._endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{GeminiBackend._model}:generateContent"
     @staticmethod
     def _pick_best_model(model_ids: list[str]) -> str | None:
@@ -96,12 +123,20 @@ class GeminiBackend:
 
         request_body = {
             "contents": [{
+                # Static system prompt FIRST, variable audio last: this is the
+                # prefix ordering Gemini's implicit cache rewards. NOTE: implicit
+                # caching only engages above a per-model token floor (≥2k–4k);
+                # our prompt (~384 tok) + short audio is well under it, so no
+                # cache hit today — this ordering just makes us eligible if the
+                # input ever grows, at zero cost/risk now.
                 "parts": [
-                    {"inlineData": {"mimeType": "audio/wav", "data": wav_b64}},
                     {"text": system_prompt},
+                    {"inlineData": {"mimeType": "audio/wav", "data": wav_b64}},
                 ]
             }],
             "generationConfig": {
+                # Deterministic: transcription/intent should not vary run-to-run.
+                "temperature": 0.2,
                 "responseMimeType": "application/json",
                 "responseSchema": {
                     "type": "object",
@@ -144,6 +179,7 @@ class GeminiBackend:
         request_body = {
             "contents": [{"parts": [{"text": system_prompt}]}],
             "generationConfig": {
+                "temperature": 0.2,
                 "responseMimeType": "application/json",
                 "responseSchema": {
                     "type": "object",
@@ -181,6 +217,7 @@ class GeminiBackend:
                 "parts": [{"text": f"{system_prompt}\n\nInput: {text}"}]
             }],
             "generationConfig": {
+                "temperature": 0.2,
                 "responseMimeType": "application/json",
                 "responseSchema": {
                     "type": "object",
@@ -217,6 +254,26 @@ class GeminiBackend:
             )
             response.raise_for_status()
             data = response.json()
+        except httpx.HTTPStatusError as e:
+            status = e.response.status_code
+            body = ""
+            try:
+                body = e.response.text.lower()
+            except Exception:
+                pass
+            # 429 = quota exhausted (the classic free-tier ceiling). A 503 that
+            # mentions quota/billing/resource-exhausted is the same root cause:
+            # the key isn't on a paid plan / has hit its allowance. Surface a
+            # clear, actionable billing error instead of a raw HTTP status.
+            billing_signals = ("quota", "billing", "resource_exhausted",
+                               "resource exhausted", "exceeded", "free tier")
+            if status == 429 or (status == 503 and any(s in body for s in billing_signals)):
+                logger.error(f"Gemini billing/quota error ({status}): {e}")
+                raise BillingError(
+                    "Gemini quota reached. Enable billing on your API key to keep transcribing."
+                ) from e
+            logger.error(f"Gemini API error: {e}")
+            raise
         except httpx.HTTPError as e:
             logger.error(f"Gemini API error: {e}")
             raise

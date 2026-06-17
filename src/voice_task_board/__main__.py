@@ -18,7 +18,7 @@ from voice_task_board.tray import create_tray_icon
 from voice_task_board.logging_setup import configure_logging
 from voice_task_board.audio import record_while_held, validate_audio_device
 from voice_task_board.config import get_config
-from voice_task_board.gemini import GeminiBackend
+from voice_task_board.gemini import GeminiBackend, BillingError
 from voice_task_board.apply_intent import apply, ApplyResult
 from voice_task_board.db import get_db
 from voice_task_board import webview_app
@@ -182,6 +182,9 @@ def main() -> int:
 
             except ValueError as e:
                 logger.info(f"Input error: {e}")
+            except BillingError as e:
+                logger.error(f"Gemini billing/quota error: {e}")
+                notif.show_billing_error(e.user_message, e.url)
             except Exception as e:
                 logger.exception(f"Recording/intent/apply failed: {e}")
                 # Check if it's a device error during recording

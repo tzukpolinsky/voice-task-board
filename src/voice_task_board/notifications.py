@@ -251,6 +251,60 @@ def _show_status(message: str) -> None:
         logger.warning(f"Could not show status toast: {e}")
 
 
+def show_billing_error(message: str, url: str) -> None:
+    """Toast a billing/quota failure with an 'Enable billing' button that opens
+    the given URL in the browser. Non-blocking."""
+    threading.Thread(target=_show_billing_error, args=(message, url), daemon=True).start()
+
+
+def _show_billing_error(message: str, url: str) -> None:
+    from windows_toasts import Toast, ToastButton, ToastDuration
+
+    toaster = _get_toaster()
+    if toaster is None:
+        return
+
+    toast = Toast(text_fields=[_APP_NAME, message])
+    toast.duration = ToastDuration.Long
+    # A launch-action button opens the URL directly when tapped. We also handle
+    # it in on_activated as a fallback in case the protocol launch is ignored.
+    toast.AddAction(ToastButton(content="Enable billing", arguments=f"open_url:{url}"))
+
+    dismissEvent = threading.Event()
+
+    def _on_activated(event: Any) -> None:
+        args = (getattr(event, "arguments", "") or "")
+        try:
+            if args.startswith("open_url:"):
+                import webbrowser
+                webbrowser.open(args[len("open_url:"):])
+        except Exception as e:
+            logger.warning(f"Billing toast activation handler failed: {e}")
+        finally:
+            _release_toast(toast)
+            dismissEvent.set()
+
+    def _on_dismissed(_: Any) -> None:
+        _release_toast(toast)
+        dismissEvent.set()
+
+    def _on_failed(_e: Any) -> None:
+        _release_toast(toast)
+        dismissEvent.set()
+
+    toast.on_activated = _on_activated
+    toast.on_dismissed = _on_dismissed
+    toast.on_failed = _on_failed
+
+    _retain_toast(toast)
+    try:
+        toaster.show_toast(toast)
+        dismissEvent.wait()
+    except Exception as e:
+        _release_toast(toast)
+        logger.warning(f"Could not show billing toast: {e}")
+
+
 def show_confirmation_toast(
     title: str,
     due: str | None,
