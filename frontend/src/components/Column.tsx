@@ -7,6 +7,7 @@ import { useToast } from '@/context/ToastContext'
 import { TaskCard } from './TaskCard'
 import { RecurringDoneCard } from './RecurringDoneCard'
 import { TaskEditModal } from './TaskEditModal'
+import { categoryDropId } from './dndIds'
 
 interface ColumnProps {
   categoryId: number
@@ -19,7 +20,7 @@ export const Column: React.FC<ColumnProps> = ({ categoryId, categoryName, tasks,
   const toast = useToast()
   const openTasks = tasks.filter(t => t.category_id === categoryId && t.status !== 'done')
   const doneTasks = tasks.filter(t => t.category_id === categoryId && t.status === 'done')
-  const { setNodeRef, isOver } = useDroppable({ id: categoryId })
+  const { setNodeRef, isOver } = useDroppable({ id: categoryDropId(categoryId) })
 
   const [hovered, setHovered] = useState(false)
   const [editingName, setEditingName] = useState(false)

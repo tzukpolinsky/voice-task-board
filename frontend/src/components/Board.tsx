@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react'
-import { DndContext, DragEndEvent } from '@dnd-kit/core'
+import { DndContext, DragEndEvent, PointerSensor, useSensor, useSensors } from '@dnd-kit/core'
 import type { ConfirmationPayload } from '@/types/domain'
 import { api } from '@/api'
 import { useTasks } from '@/hooks/useTasks'
@@ -13,6 +13,7 @@ import { Onboarding } from './Onboarding'
 import { ConfirmationOverlay } from './ConfirmationOverlay'
 import { RemoteBanner } from './RemoteBanner'
 import { BoardHeader } from './BoardHeader'
+import { parseTaskDragId, parseCategoryDropId } from './dndIds'
 
 export const Board: React.FC = () => {
   const tasksHook = useTasks()
@@ -27,6 +28,13 @@ export const Board: React.FC = () => {
   const [newCategoryName, setNewCategoryName] = useState('')
   const [showBanner, setShowBanner] = useState(false)
   const [confirmation, setConfirmation] = useState<ConfirmationPayload | null>(null)
+
+  // Require a small drag distance before activating. Without this the pointer
+  // sensor fires on every pointerdown, which in WebView2/Edge competes with the
+  // card's click targets and can leave the card feeling un-draggable.
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 5 } })
+  )
 
   const loading = tasksHook.loading || categoriesHook.loading || configHook.loading || pendingHook.loading
 
@@ -105,16 +113,16 @@ export const Board: React.FC = () => {
 
   const handleDragEnd = async (event: DragEndEvent) => {
     const { active, over } = event
-    if (over && active.id !== over.id) {
-      const taskId = Number(active.id)
-      const categoryId = Number(over.id)
-      try {
-        await api.moveTask(taskId, categoryId)
-        refetchAll()
-      } catch (e) {
-        console.error('Failed to move task', e)
-        toast.show(e instanceof Error ? e.message : 'Failed to move task')
-      }
+    if (!over) return
+    const taskId = parseTaskDragId(active.id)
+    const categoryId = parseCategoryDropId(over.id)
+    if (taskId === null || categoryId === null) return
+    try {
+      await api.moveTask(taskId, categoryId)
+      refetchAll()
+    } catch (e) {
+      console.error('Failed to move task', e)
+      toast.show(e instanceof Error ? e.message : 'Failed to move task')
     }
   }
 
@@ -150,7 +158,7 @@ export const Board: React.FC = () => {
   }
 
   return (
-    <DndContext onDragEnd={handleDragEnd}>
+    <DndContext sensors={sensors} onDragEnd={handleDragEnd}>
       <div className="board" style={{ padding: '16px', height: '100vh', overflow: 'auto' }}>
         <BoardHeader pendingMirrorCount={pendingHook.count} onOpenSettings={() => setShowSettings(true)} />
 

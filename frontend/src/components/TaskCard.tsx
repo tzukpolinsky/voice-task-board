@@ -8,6 +8,7 @@ import { useToast } from '@/context/ToastContext'
 import { formatDue, isDueSoon, isOverdue } from './TaskCard.helpers'
 import { RecurringCompleteButton } from './RecurringCompleteButton'
 import { TaskEditModal } from './TaskEditModal'
+import { taskDragId } from './dndIds'
 
 interface TaskCardProps {
   task: Task
@@ -23,7 +24,7 @@ const stopDrag = {
 export const TaskCard: React.FC<TaskCardProps> = ({ task, onChanged }) => {
   const toast = useToast()
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
-    id: task.id,
+    id: taskDragId(task.id),
   })
 
   const [editing, setEditing] = useState(false)
@@ -102,6 +103,8 @@ export const TaskCard: React.FC<TaskCardProps> = ({ task, onChanged }) => {
           marginBottom: 'var(--space-2)',
           boxShadow: isDragging ? 'var(--shadow-card-drag)' : 'var(--shadow-card)',
           cursor: 'grab',
+          touchAction: 'none',
+          userSelect: 'none',
         }}
         {...attributes}
         {...listeners}
