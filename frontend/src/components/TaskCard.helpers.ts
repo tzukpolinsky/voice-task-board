@@ -22,6 +22,25 @@ export function toLocalInput(task: Task): string {
   } catch { return '' }
 }
 
+/**
+ * The task's due date as a local `Date` for a date/time picker, or null.
+ * Full-day tasks return local midnight of that calendar day (the stored value
+ * is a bare `YYYY-MM-DD`, which must NOT be parsed as UTC midnight or it can
+ * slip to the previous day in negative-offset timezones).
+ */
+export function toLocalDate(task: Task): Date | null {
+  if (!task.due_at_utc) return null
+  try {
+    if (task.is_full_day) {
+      const [y, m, d] = task.due_at_utc.slice(0, 10).split('-').map(Number)
+      const dt = new Date(y, m - 1, d)
+      return isNaN(dt.getTime()) ? null : dt
+    }
+    const dt = new Date(task.due_at_utc.endsWith('Z') ? task.due_at_utc : task.due_at_utc + 'Z')
+    return isNaN(dt.getTime()) ? null : dt
+  } catch { return null }
+}
+
 export function isDueSoon(task: Task): boolean {
   if (!task.due_at_utc || task.is_full_day) return false
   try {

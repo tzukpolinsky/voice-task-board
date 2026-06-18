@@ -1,0 +1,22 @@
+[
+  {
+    "file": "clips/buy-milk.wav",
+    "transcript": "תוסיף לי משימה ללוח האישי לקנות חלב מחר בבוקר"
+  },
+  {
+    "file": "clips/edit-buy-milk.wav",
+    "transcript": "תערוך את המשימה בלוח האישי של הקניית חלב מחר בבוקר ותעביר אותה לחמש בערב"
+  },
+  {
+    "file": "clips/recurrence-graden-triming.wav",
+    "transcript": "תייצר לי משימה לגזוז עשבים שוטים בגינה כל יום רביעי בשש בערב כשאני חוזר מהעבודה"
+  },
+  {
+    "file": "clips/remove-neta-meeting-work.wav",
+    "transcript": "יש לי משימה בלוח עבודה להיפגש עם נטע, תעיף לי את זה מהלוח"
+  },
+  {
+    "file": "clips/add-tomy-meeting-work.wav",
+    "transcript": "אני חייב לשים לעצמי משימה להיפגש עם טומי, טומי מהגנים, לוח חשוב שלישי הקרוב בתשע בבוקר"
+  }
+]

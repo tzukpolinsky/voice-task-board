@@ -81,3 +81,60 @@
   gap: 10px;
   margin-top: 8px;
 }
+
+/* ── react-datepicker, themed to match the app ───────────────────────────── */
+
+.vtb-datepicker-wrapper {
+  flex: 1;
+  min-width: 160px;
+}
+.vtb-datepicker-wrapper .react-datepicker__input-container {
+  display: block;
+}
+
+.vtb-datepicker-popper {
+  z-index: 50;
+}
+
+.vtb-datepicker-popper .react-datepicker {
+  font-family: inherit;
+  background: var(--color-surface-elev);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  color: var(--color-text);
+  box-shadow: var(--shadow-lg);
+}
+
+.vtb-datepicker-popper .react-datepicker__header,
+.vtb-datepicker-popper .react-datepicker__time-container .react-datepicker__time {
+  background: var(--color-surface-muted);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.vtb-datepicker-popper .react-datepicker__current-month,
+.vtb-datepicker-popper .react-datepicker-time__header,
+.vtb-datepicker-popper .react-datepicker__day-name,
+.vtb-datepicker-popper .react-datepicker__day,
+.vtb-datepicker-popper .react-datepicker__time-list-item {
+  color: var(--color-text);
+}
+
+.vtb-datepicker-popper .react-datepicker__day:hover,
+.vtb-datepicker-popper .react-datepicker__time-list-item:hover {
+  background: var(--color-surface-alt);
+}
+
+.vtb-datepicker-popper .react-datepicker__day--selected,
+.vtb-datepicker-popper .react-datepicker__day--keyboard-selected,
+.vtb-datepicker-popper .react-datepicker__time-list-item--selected {
+  background: var(--color-primary);
+  color: #fff;
+}
+
+.vtb-datepicker-popper .react-datepicker__day--outside-month {
+  color: var(--color-text-faint);
+}
+
+.vtb-datepicker-popper .react-datepicker__triangle {
+  display: none;
+}

@@ -1,10 +1,12 @@
 import React, { useState } from 'react'
 import { X } from 'lucide-react'
+import DatePicker from 'react-datepicker'
 import type { Task } from '@/types/domain'
 import { api } from '@/api'
 import { useToast } from '@/context/ToastContext'
-import { toLocalInput } from './TaskCard.helpers'
+import { toLocalDate } from './TaskCard.helpers'
 import { RecurrenceSelect } from './RecurrenceSelect'
+import 'react-datepicker/dist/react-datepicker.css'
 import '../styles/TaskEditModal.css'
 
 interface TaskEditModalProps {
@@ -22,7 +24,7 @@ export const TaskEditModal: React.FC<TaskEditModalProps> = ({ task, categoryId, 
 
   const [title, setTitle] = useState(task?.title ?? '')
   const [description, setDescription] = useState(task?.description ?? '')
-  const [dueInput, setDueInput] = useState(task ? toLocalInput(task) : '')
+  const [dueDate, setDueDate] = useState<Date | null>(task ? toLocalDate(task) : null)
   const [isFullDay, setIsFullDay] = useState(task?.is_full_day ?? false)
   const [leadTime, setLeadTime] = useState(task?.lead_time_minutes ?? 30)
   const [recurrence, setRecurrence] = useState<string | null>(task?.recurrence_rule ?? null)
@@ -43,9 +45,16 @@ export const TaskEditModal: React.FC<TaskEditModalProps> = ({ task, categoryId, 
     try {
       let dueAtUtc: string | null = null
       let dueTz: string | null = null
-      if (dueInput) {
-        const d = new Date(dueInput) // browser parses datetime-local as local time
-        dueAtUtc = d.toISOString().slice(0, 19)
+      if (dueDate) {
+        if (isFullDay) {
+          // Store the local calendar day as a bare date — no instant, no tz shift.
+          const y = dueDate.getFullYear()
+          const m = String(dueDate.getMonth() + 1).padStart(2, '0')
+          const d = String(dueDate.getDate()).padStart(2, '0')
+          dueAtUtc = `${y}-${m}-${d}T00:00:00`
+        } else {
+          dueAtUtc = dueDate.toISOString().slice(0, 19)
+        }
         dueTz = Intl.DateTimeFormat().resolvedOptions().timeZone
       }
 
@@ -108,32 +117,31 @@ export const TaskEditModal: React.FC<TaskEditModalProps> = ({ task, categoryId, 
         {/* Due + All day on one row */}
         <div className="task-modal-row">
           <label className="task-edit-label">Due</label>
-          <input
-            type={isFullDay ? 'date' : 'datetime-local'}
-            value={dueInput}
-            onChange={(e) => setDueInput(e.target.value)}
+          <DatePicker
+            selected={dueDate}
+            onChange={(d) => setDueDate(d)}
+            showTimeSelect={!isFullDay}
+            timeIntervals={15}
+            dateFormat={isFullDay ? 'EEE, MMM d, yyyy' : 'EEE, MMM d, yyyy h:mm aa'}
+            placeholderText={isFullDay ? 'Pick a date' : 'Pick a date & time'}
             className="task-edit-input task-edit-input--inline"
+            popperClassName="vtb-datepicker-popper"
+            wrapperClassName="vtb-datepicker-wrapper"
+            shouldCloseOnSelect={isFullDay}
+            isClearable
           />
           <label className="task-edit-check">
             <input
               type="checkbox"
               checked={isFullDay}
-              onChange={(e) => {
-                setIsFullDay(e.target.checked)
-                if (dueInput.length >= 10) setDueInput(dueInput.slice(0, 10))
-              }}
+              onChange={(e) => setIsFullDay(e.target.checked)}
             />
             All day
           </label>
-          {dueInput && (
-            <button onClick={() => setDueInput('')} title="Clear due date" className="task-edit-clear">
-              <X size={12} />
-            </button>
-          )}
         </div>
 
-        {/* Remind — only when a due date is set */}
-        {dueInput && (
+        {/* Remind — only when a timed due date is set */}
+        {dueDate && !isFullDay && (
           <div className="task-modal-row">
             <label className="task-edit-label">Remind</label>
             <select
