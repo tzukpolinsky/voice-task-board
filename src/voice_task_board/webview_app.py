@@ -59,6 +59,12 @@ class Api:
         db = get_db()
         return db.add_category(name)
 
+    def rename_category(self, category_id: int, name: str) -> None:
+        db = get_db()
+        if category_id == 1:
+            raise ValueError("Cannot rename the default category")
+        db.rename_category(category_id, name)
+
     def delete_category(self, category_id: int) -> None:
         db = get_db()
         if category_id == 1:

@@ -1,6 +1,6 @@
 import React, { useState } from 'react'
 import { useDroppable } from '@dnd-kit/core'
-import { Clipboard } from 'lucide-react'
+import { Clipboard, Pencil } from 'lucide-react'
 import type { Task, ArchivedTask } from '@/types/domain'
 import { api } from '@/api'
 import { useToast } from '@/context/ToastContext'
@@ -22,7 +22,28 @@ export const Column: React.FC<ColumnProps> = ({ categoryId, categoryName, tasks,
   const { setNodeRef, isOver } = useDroppable({ id: categoryId })
 
   const [hovered, setHovered] = useState(false)
+  const [editingName, setEditingName] = useState(false)
+  const [nameDraft, setNameDraft] = useState(categoryName)
   const [adding, setAdding] = useState(false)
+
+  const canRename = categoryId !== 1 // the default category is fixed
+
+  const handleRename = async () => {
+    const next = nameDraft.trim()
+    setEditingName(false)
+    if (!next || next === categoryName) {
+      setNameDraft(categoryName)
+      return
+    }
+    try {
+      await api.renameCategory(categoryId, next)
+      onTasksChange()
+    } catch (e) {
+      console.error('Failed to rename category', e)
+      toast.show(e instanceof Error ? e.message : 'Failed to rename category')
+      setNameDraft(categoryName)
+    }
+  }
   const [tab, setTab] = useState<'open' | 'done'>('open')
   const [archivedTasks, setArchivedTasks] = useState<ArchivedTask[]>([])
   const [showArchived, setShowArchived] = useState(false)
@@ -76,10 +97,48 @@ export const Column: React.FC<ColumnProps> = ({ categoryId, categoryName, tasks,
         flexDirection: 'column',
       }}
     >
-      <div className="column-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 'var(--space-2)' }}>
-        <h3 style={{ marginBottom: 0, fontSize: 'var(--text-md)', fontWeight: 600 }}>
-          {categoryName}
-        </h3>
+      <div className="column-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 'var(--space-1)', marginBottom: 'var(--space-2)' }}>
+        {editingName ? (
+          <input
+            autoFocus
+            value={nameDraft}
+            onChange={(e) => setNameDraft(e.target.value)}
+            onBlur={handleRename}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') handleRename()
+              if (e.key === 'Escape') { setEditingName(false); setNameDraft(categoryName) }
+            }}
+            style={{
+              flex: 1,
+              minWidth: 0,
+              fontSize: 'var(--text-md)',
+              fontWeight: 600,
+              padding: '2px 6px',
+              border: '1px solid var(--color-border-strong)',
+              borderRadius: 'var(--radius-sm)',
+              background: 'var(--color-surface)',
+              color: 'var(--color-text)',
+            }}
+          />
+        ) : (
+          <h3
+            onDoubleClick={() => { if (canRename) { setNameDraft(categoryName); setEditingName(true) } }}
+            title={canRename ? 'Double-click to rename' : undefined}
+            style={{ marginBottom: 0, fontSize: 'var(--text-md)', fontWeight: 600, flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 'var(--space-1)' }}
+          >
+            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{categoryName}</span>
+            {canRename && hovered && (
+              <button
+                onClick={() => { setNameDraft(categoryName); setEditingName(true) }}
+                title="Rename category"
+                aria-label="Rename category"
+                style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: 'var(--color-text-tertiary)', display: 'inline-flex', flexShrink: 0 }}
+              >
+                <Pencil size={13} />
+              </button>
+            )}
+          </h3>
+        )}
         <span className="column-count">
           {tab === 'open' ? openTasks.length : doneTasks.length}
         </span>

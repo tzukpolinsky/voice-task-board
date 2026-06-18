@@ -46,6 +46,7 @@ interface PywebviewApi {
   // Categories
   get_categories(): Promise<Category[]>
   add_category(name: string): Promise<number>
+  rename_category(id: number, name: string): Promise<void>
   delete_category(id: number): Promise<void>
 
   // Config / remote

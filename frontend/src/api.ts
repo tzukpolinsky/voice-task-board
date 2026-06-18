@@ -23,6 +23,10 @@ export const api = {
     return window.pywebview?.api.add_category(name) ?? 0
   },
 
+  renameCategory: async (id: number, name: string): Promise<void> => {
+    return window.pywebview?.api.rename_category(id, name)
+  },
+
   deleteCategory: async (id: number): Promise<void> => {
     return window.pywebview?.api.delete_category(id)
   },

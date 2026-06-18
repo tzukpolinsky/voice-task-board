@@ -512,7 +512,27 @@ class Database:
             )
             self._conn.commit()
             return cast(int, cursor.lastrowid)
-    
+
+    def rename_category(self, category_id: int, name: str) -> None:
+        """Rename a category. Tasks reference categories by category_id, so the
+        new name flows everywhere automatically. Raises ValueError if the name is
+        blank or already taken (categories.name is UNIQUE)."""
+        clean = name.strip()
+        if not clean:
+            raise ValueError("Category name cannot be empty.")
+        with self._lock:
+            cursor = self._conn.cursor()
+            try:
+                cursor.execute(
+                    "UPDATE categories SET name = ? WHERE id = ?",
+                    (clean, category_id),
+                )
+                self._conn.commit()
+            except sqlite3.IntegrityError as e:
+                if "UNIQUE constraint failed" in str(e):
+                    raise ValueError(f"A category named '{clean}' already exists.") from e
+                raise
+
     def delete_category(self, category_id: int) -> None:
         """Delete a category by ID. Raises error if it has tasks (foreign key constraint)."""
         with self._lock:
