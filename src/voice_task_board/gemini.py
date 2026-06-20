@@ -55,7 +55,7 @@ class GeminiBackend:
         try:
             response = httpx.get(
                 "https://generativelanguage.googleapis.com/v1beta/models",
-                params={"key": api_key},
+                headers={"x-goog-api-key": api_key},
                 timeout=10.0,
             )
             response.raise_for_status()
@@ -248,7 +248,9 @@ class GeminiBackend:
         try:
             response = httpx.post(
                 GeminiBackend._endpoint,
-                params={"key": self._api_key},
+                # Key in a header, not the URL query string, so it doesn't land
+                # in request logs / proxy access logs the way ?key= would.
+                headers={"x-goog-api-key": self._api_key},
                 json=request_body,
                 timeout=30.0,
             )

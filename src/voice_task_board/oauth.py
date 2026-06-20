@@ -16,8 +16,11 @@ import httpx
 logger = logging.getLogger(__name__)
 
 
+# Desktop / "installed application" OAuth client. For this client type Google
+# treats the client secret as non-confidential and security rests on PKCE
+# (code_challenge S256, below) — a secret shipped in a distributed binary is
+# extractable and provides no protection, so we deliberately do not embed one.
 GOOGLE_CLIENT_ID = "709314449728-3j0ip56lr0uvbpreb136p2mpq87o63tv.apps.googleusercontent.com"
-GOOGLE_CLIENT_SECRET = "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"
 GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 GOOGLE_SCOPE = "https://www.googleapis.com/auth/tasks"
@@ -35,16 +38,15 @@ def start_google_oauth() -> dict[str, Any]:
         auth_url=GOOGLE_AUTH_URL,
         token_url=GOOGLE_TOKEN_URL,
         client_id=GOOGLE_CLIENT_ID,
-        client_secret=GOOGLE_CLIENT_SECRET,
         scope=GOOGLE_SCOPE,
     )
 
 
 def refresh_google_token(tokens: dict[str, Any]) -> dict[str, Any]:
-    return _refresh(GOOGLE_TOKEN_URL, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, tokens)
+    return _refresh(GOOGLE_TOKEN_URL, GOOGLE_CLIENT_ID, tokens)
 
 
-def _refresh(token_url: str, client_id: str, client_secret: str, tokens: dict[str, Any]) -> dict[str, Any]:
+def _refresh(token_url: str, client_id: str, tokens: dict[str, Any]) -> dict[str, Any]:
     refresh_token = tokens.get("refresh_token")
     if not refresh_token:
         raise OAuthError("No refresh_token stored")
@@ -53,8 +55,6 @@ def _refresh(token_url: str, client_id: str, client_secret: str, tokens: dict[st
         "refresh_token": refresh_token,
         "client_id": client_id,
     }
-    if client_secret:
-        data["client_secret"] = client_secret
     resp = httpx.post(token_url, data=data, timeout=15)
     resp.raise_for_status()
     new_tokens: dict[str, Any] = resp.json()
@@ -74,7 +74,6 @@ def _run_pkce_flow(
     auth_url: str,
     token_url: str,
     client_id: str,
-    client_secret: str,
     scope: str,
 ) -> dict[str, Any]:
 
@@ -102,9 +101,26 @@ def _run_pkce_flow(
         def do_GET(self) -> None:
             parsed = urllib.parse.urlparse(self.path)
             qs = urllib.parse.parse_qs(parsed.query)
-            result["code"] = qs.get("code", [""])[0]
-            result["state"] = qs.get("state", [""])[0]
-            result["error"] = qs.get("error", [""])[0]
+            code = qs.get("code", [""])[0]
+            req_state = qs.get("state", [""])[0]
+            error = qs.get("error", [""])[0]
+
+            # Only treat this as the real OAuth callback if it carries a result
+            # we recognize: a code whose state matches the one we generated, or
+            # an explicit error from Google. Stray requests (favicon probes,
+            # browser prefetch, or another local process racing the port with a
+            # forged/empty state) get a 404 and do NOT complete the flow — this
+            # prevents a spurious GET from prematurely closing the listener and
+            # rejects callbacks that don't bind to our PKCE state.
+            is_valid_success = bool(code) and secrets.compare_digest(req_state, state)
+            if not (is_valid_success or error):
+                self.send_response(404)
+                self.end_headers()
+                return
+
+            result["code"] = code
+            result["state"] = req_state
+            result["error"] = error
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.end_headers()
@@ -114,21 +130,40 @@ def _run_pkce_flow(
         def log_message(self, *args: Any) -> None:
             pass  # suppress console noise
 
-    server = HTTPServer(("localhost", REDIRECT_PORT), Handler)
-    server_thread = threading.Thread(target=server.handle_request, daemon=True)
+    # Bind to the loopback IP literal (not the name "localhost", which can
+    # resolve to an external-facing or IPv6 address depending on the hosts file)
+    # so the callback listener is reachable only from this machine.
+    server = HTTPServer(("127.0.0.1", REDIRECT_PORT), Handler)
+    # A 1s socket timeout makes handle_request() return periodically even with no
+    # traffic, so the loop can re-check `done` and the thread exits cleanly when
+    # the outer done.wait timeout fires (rather than blocking forever on accept).
+    server.timeout = 1.0
+    # handle_request() serves exactly one request and returns; loop until we get
+    # the valid callback (or the outer done.wait timeout fires), so a stray 404'd
+    # request doesn't consume our single served request and strand the flow.
+    def _serve_until_done() -> None:
+        while not done.is_set():
+            server.handle_request()
+
+    server_thread = threading.Thread(target=_serve_until_done, daemon=True)
     server_thread.start()
 
     webbrowser.open(full_url)
     logger.info("Opened browser for Google OAuth")
 
-    done.wait(timeout=120)
+    got_callback = done.wait(timeout=120)
+    # Release the serving thread even on timeout: setting `done` lets the
+    # handle_request() loop exit at its next 1s tick instead of lingering.
+    done.set()
     server.server_close()
 
     if result.get("error"):
         raise OAuthError(f"OAuth error from Google: {result['error']}")
-    if not result.get("code"):
+    if not got_callback or not result.get("code"):
         raise OAuthError("OAuth timed out or no code received")
-    if result.get("state") != state:
+    # Defense in depth — the handler already enforces this, but re-verify the
+    # state binding before we exchange the code.
+    if not secrets.compare_digest(result.get("state", ""), state):
         raise OAuthError("OAuth state mismatch — possible CSRF")
 
     token_data: dict[str, str] = {
@@ -138,8 +173,6 @@ def _run_pkce_flow(
         "client_id": client_id,
         "code_verifier": verifier,
     }
-    if client_secret:
-        token_data["client_secret"] = client_secret
     resp = httpx.post(token_url, data=token_data, timeout=15)
     if not resp.is_success:
         logger.error(f"Token exchange failed {resp.status_code}: {resp.text}")

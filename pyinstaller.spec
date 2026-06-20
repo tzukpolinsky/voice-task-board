@@ -9,6 +9,9 @@ a = Analysis(
     ],
     hiddenimports=[
         'pystray._win32',
+        # win32crypt gates DPAPI secret storage (config.py). Pin it explicitly so
+        # a missing pywin32 submodule can't silently disable encryption at rest.
+        'win32crypt',
         'sounddevice',
         'pycaw',
         'pycaw.pycaw',

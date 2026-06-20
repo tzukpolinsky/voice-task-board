@@ -152,6 +152,7 @@ export const Settings: React.FC<SettingsProps> = ({ isOpen, onClose, onConfigCha
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState<string | null>(null)
   const [remoteProvider, setRemoteProvider] = useState<string | null>(null)
+  const [encryptionUnavailable, setEncryptionUnavailable] = useState(false)
 
   React.useEffect(() => {
     if (isOpen) {
@@ -168,6 +169,7 @@ export const Settings: React.FC<SettingsProps> = ({ isOpen, onClose, onConfigCha
           setApiKey(config.gemini_api_key || '')
           setHotkey(config.hotkey || 'ctrl+shift+space')
           setRemoteProvider(config.remote_provider ?? null)
+          setEncryptionUnavailable(Boolean(config.encryption_unavailable))
         }
       }
       const cats = await api.getCategories()
@@ -184,7 +186,19 @@ export const Settings: React.FC<SettingsProps> = ({ isOpen, onClose, onConfigCha
         await pywebview.api.save_config(apiKey, hotkey)
       }
       onConfigChanged()
-      onClose()
+
+      // save_config may have failed to encrypt (DPAPI unavailable). Re-read the
+      // flag: if secrets weren't persisted, keep the panel open and show the
+      // warning instead of silently closing as though the save succeeded.
+      let encFailed = false
+      if (pywebview?.api.get_config) {
+        const fresh = await pywebview.api.get_config()
+        encFailed = Boolean(fresh?.encryption_unavailable)
+        setEncryptionUnavailable(encFailed)
+      }
+      if (!encFailed) {
+        onClose()
+      }
     } catch (e) {
       console.error('Failed to save config', e)
     }
@@ -230,6 +244,28 @@ export const Settings: React.FC<SettingsProps> = ({ isOpen, onClose, onConfigCha
     <div className="settings-overlay">
       <div className="settings-panel">
         <h2 style={{ marginBottom: '16px' }}>Settings</h2>
+
+        {encryptionUnavailable && (
+          <div
+            role="alert"
+            style={{
+              marginBottom: '16px',
+              padding: '10px 12px',
+              background: 'var(--color-danger-bg, #3a1212)',
+              border: '1px solid var(--color-danger-strong)',
+              borderRadius: '4px',
+              fontSize: '12px',
+              color: 'var(--color-danger-strong)',
+            }}
+          >
+            <strong>Secrets could not be saved securely.</strong> Windows
+            encryption (DPAPI) is unavailable, so your API key and remote
+            connection were <em>not</em> stored — to avoid writing them to disk
+            in plain text. They will need to be re-entered next time the app
+            starts. If this persists, check that the app has access to Windows
+            Data Protection.
+          </div>
+        )}
 
         <div className="settings-row">
           <label className="settings-label">API Key</label>

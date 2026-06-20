@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import urllib.parse
 from datetime import datetime, timezone
 from typing import Any
 import time
@@ -103,6 +104,18 @@ GOOGLE_TASKLIST = "@default"
 GOOGLE_BASE = "https://www.googleapis.com/tasks/v1"
 
 
+def _task_url(external_id: str) -> str:
+    """Build the Google Tasks URL for a single task, percent-encoding the id.
+
+    external_id originates from Google API responses (stored in SQLite), so it's
+    not user-controlled today — but it crosses a trust boundary back into a URL
+    path. Encoding it (safe="") keeps a stray '/', '?', or '..' from altering the
+    request path regardless of what's in the DB.
+    """
+    quoted = urllib.parse.quote(external_id, safe="")
+    return f"{GOOGLE_BASE}/lists/{GOOGLE_TASKLIST}/tasks/{quoted}"
+
+
 def _google_create(task: Task) -> str:
     body: dict[str, Any] = {"title": task.title, "notes": task.description or ""}
     if task.due_at_utc:
@@ -126,7 +139,7 @@ def _google_update(task: Task) -> None:
     if task.due_at_utc:
         body["due"] = _to_rfc3339(task.due_at_utc) if not task.is_full_day else f"{task.due_at_utc[:10]}T00:00:00.000Z"
     resp = httpx.patch(
-        f"{GOOGLE_BASE}/lists/{GOOGLE_TASKLIST}/tasks/{task.external_id}",
+        _task_url(task.external_id),
         headers=_headers(), json=body, timeout=15,
     )
     resp.raise_for_status()
@@ -137,7 +150,7 @@ def _google_complete(task: Task) -> None:
         return
     body = {"status": "completed"}
     httpx.patch(
-        f"{GOOGLE_BASE}/lists/{GOOGLE_TASKLIST}/tasks/{task.external_id}",
+        _task_url(task.external_id),
         headers=_headers(), json=body, timeout=15,
     ).raise_for_status()
 
@@ -146,14 +159,14 @@ def _google_delete(task: Task) -> None:
     if not task.external_id:
         return
     httpx.delete(
-        f"{GOOGLE_BASE}/lists/{GOOGLE_TASKLIST}/tasks/{task.external_id}",
+        _task_url(task.external_id),
         headers=_headers(), timeout=15,
     ).raise_for_status()
 
 
 def _google_get_updated(external_id: str) -> str | None:
     resp = httpx.get(
-        f"{GOOGLE_BASE}/lists/{GOOGLE_TASKLIST}/tasks/{external_id}",
+        _task_url(external_id),
         headers=_headers(), timeout=15,
     )
     if resp.status_code == 404:
@@ -342,7 +355,7 @@ def _google_delete_occurrence(external_id: str) -> None:
     try:
         _make_api_call_with_backoff(
             "DELETE",
-            f"{GOOGLE_BASE}/lists/{GOOGLE_TASKLIST}/tasks/{external_id}",
+            _task_url(external_id),
             headers=_headers(), timeout=15,
         )
     except httpx.HTTPStatusError as e:
@@ -358,7 +371,7 @@ def _google_complete_occurrence(external_id: str) -> None:
     body = {"status": "completed"}
     _make_api_call_with_backoff(
         "PATCH",
-        f"{GOOGLE_BASE}/lists/{GOOGLE_TASKLIST}/tasks/{external_id}",
+        _task_url(external_id),
         headers=_headers(), json=body, timeout=15,
     )
 

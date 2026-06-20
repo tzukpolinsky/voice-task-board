@@ -38,10 +38,38 @@ jobs:
 
       - name: Install frontend deps
         working-directory: frontend
-        run: npm install
+        # ci installs exactly from the committed package-lock.json and fails if
+        # package.json and the lockfile disagree — reproducible builds and no
+        # silent dependency drift into the signed installer.
+        run: npm ci
 
       - name: Build
         run: .\build.ps1
+
+      # ── Code signing ─────────────────────────────────────────────────────
+      # The app auto-starts at login, registers a global hotkey, and accesses
+      # the microphone — exactly the profile SmartScreen/AV scrutinize. An
+      # UNSIGNED installer will trip SmartScreen ("Unknown publisher") and is
+      # more likely to be quarantined. Sign both the app exe AND the installer
+      # with an Authenticode (ideally EV / Azure Trusted Signing) certificate.
+      #
+      # To enable: add the signing secrets to the repo and uncomment. Sign the
+      # built exe BEFORE Inno packages it, then sign the installer after. With
+      # Azure Trusted Signing, use azure/trusted-signing-action; for a PFX:
+      #
+      # - name: Sign app executable
+      #   shell: pwsh
+      #   env:
+      #     CODE_SIGN_PFX_BASE64: ${{ secrets.CODE_SIGN_PFX_BASE64 }}
+      #     CODE_SIGN_PFX_PASSWORD: ${{ secrets.CODE_SIGN_PFX_PASSWORD }}
+      #   run: |
+      #     [IO.File]::WriteAllBytes("cert.pfx", [Convert]::FromBase64String($env:CODE_SIGN_PFX_BASE64))
+      #     & signtool sign /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 `
+      #       /f cert.pfx /p $env:CODE_SIGN_PFX_PASSWORD `
+      #       "dist\VoiceTaskBoard\VoiceTaskBoard.exe"
+      #     Remove-Item cert.pfx
+      # NOTE: the exe must be signed before build.ps1 runs Inno Setup (move this
+      # step accordingly), and the resulting installer signed the same way.
 
       - name: Verify installer was produced
         run: |

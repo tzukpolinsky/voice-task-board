@@ -53,4 +53,7 @@ export interface Config {
   hotkey: string
   remote_provider: string | null
   connect_banner_dismissed: boolean
+  // True when Windows DPAPI was unavailable, so secrets could not be saved
+  // encrypted (and were therefore not persisted at all).
+  encryption_unavailable?: boolean
 }

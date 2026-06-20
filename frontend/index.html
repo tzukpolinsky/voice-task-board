@@ -2,12 +2,27 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+    <!--
+      Content-Security-Policy: defense-in-depth for the WebView, which has full
+      access to the pywebview JS API bridge. Everything ships locally (scripts
+      and fonts are bundled by Vite), so we lock origins down to 'self':
+        - script-src 'self'         → only our bundled JS may run (no inline/eval)
+        - style-src  'self' 'unsafe-inline' → app uses inline style={} props and
+                                      Vite injects <style>; fonts are local
+        - font-src   'self' data:   → self-hosted @fontsource woff2 (no CDN)
+        - img-src    'self' data:   → bundled assets + inline SVG data URIs
+        - connect-src 'none'        → the UI talks to Python via the bridge, not
+                                      the network; block all fetch/XHR/WebSocket
+        - object-src 'none', base-uri 'none', frame-ancestors 'none'
+      Fonts were previously pulled from fonts.googleapis.com; now self-hosted.
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
+    />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="color-scheme" content="dark light" />
     <meta name="theme-color" content="#0e0e13" />
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" />
     <title>Voice Task Board</title>
   </head>
   <body>

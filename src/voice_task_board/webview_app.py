@@ -179,6 +179,7 @@ class Api:
             "hotkey": config.hotkey,
             "remote_provider": config.remote_provider,
             "connect_banner_dismissed": config.connect_banner_dismissed,
+            "encryption_unavailable": config.encryption_unavailable,
         }
 
     def save_config(self, gemini_api_key: str | None = None, hotkey: str | None = None) -> None:
@@ -233,7 +234,7 @@ class Api:
         try:
             response = httpx.get(
                 "https://generativelanguage.googleapis.com/v1beta/models",
-                params={"key": api_key},
+                headers={"x-goog-api-key": api_key},
                 timeout=10.0,
             )
             response.raise_for_status()
@@ -253,12 +254,23 @@ class Api:
             return False
     
     def open_url(self, url: str) -> None:
-        """Open a URL in the user's default browser."""
+        """Open an http(s) URL in the user's default browser.
+
+        Scheme-allowlisted: webbrowser.open() can otherwise hand off file:// and
+        registered protocol handlers (e.g. ms-*, custom app schemes) to
+        ShellExecute, turning this JS-exposed bridge method into a local-file /
+        protocol launch primitive. We only ever need to open web links.
+        """
+        from urllib.parse import urlparse
         import webbrowser
         try:
+            scheme = urlparse(url).scheme.lower()
+            if scheme not in ("http", "https"):
+                logger.warning(f"open_url refused non-http(s) URL: {url!r}")
+                return
             webbrowser.open(url)
         except Exception as e:
-            logger.error(f"Failed to open URL {url}: {e}")
+            logger.error(f"Failed to open URL: {e}")
 
     def complete_occurrence_choice(self, task_id: int, scope: str) -> None:
         """Complete a recurring occurrence or end the whole series.
