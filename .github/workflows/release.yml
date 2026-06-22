@@ -3,7 +3,11 @@ name: Build and release installer
 on:
   push:
     tags:
+      # Match both 'v'-prefixed tags (v0.6.0) and bare semver tags (0.6.0).
+      # Previously only 'v*' matched, so a bare '0.6.0' tag created a release
+      # with no built installer because this workflow never ran for it.
       - 'v*'
+      - '[0-9]+.[0-9]+.[0-9]+'
   workflow_dispatch:
 
 permissions:
